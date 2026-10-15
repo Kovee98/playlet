@@ -1,0 +1,47 @@
+<component name="SubscriptionsScreen" extends="Group" includes="AutoBind,Focus,ContextMenuProvider">
+    <interface>
+        <field id="navBar" type="node" bind="/NavBar" />
+        <field id="profilesService" type="node" bind="/ProfilesService" />
+        <field id="invidious" type="node" bind="/Invidious" />
+        <field id="jobQueue" type="node" bind="/JobQueue" />
+        <field id="appController" type="node" bind="/AppController" />
+        <field id="videoQueue" type="node" bind="/VideoQueue" />
+        <field id="bookmarksService" type="node" bind="/BookmarksService" />
+        <field id="someContentReady" type="boolean" alwaysNotify="true" />
+        <field id="onError" type="string" alwaysNotify="true" />
+        <function name="Refresh" />
+        <function name="PlayVideo" />
+        <function name="QueueVideo" />
+        <function name="OpenVideoChannel" />
+    </interface>
+    <children>
+        <Label text="Subscriptions" translation="[90,40]" font="font:LargeBoldSystemFont" />
+        <Button id="refreshButton" text="Refresh" translation="[900,35]" />
+        <Label id="feedTitle" text="All" translation="[355,110]" font="font:SmallBoldSystemFont" />
+        <Label id="channelsStatus" translation="[90,620]" width="245" wrap="true" font="font:SmallestSystemFont" />
+        <MarkupList
+            id="channels"
+            itemComponentName="SubscriptionChannelItem"
+            translation="[90,125]"
+            itemSize="[245,48]"
+            itemSpacing="[0,8]"
+            numRows="8"
+            focusBitmapUri="pkg:/images/white.$$RES$$.9.png"
+            focusBitmapBlendColor="0xFF1C30FF"
+        />
+        <Label id="status" translation="[355,220]" width="800" wrap="true" />
+        <MarkupGrid
+            itemComponentName="RowCell"
+            id="grid"
+            translation="[355,160]"
+            scale="[0.73,0.73]"
+            numRows="2"
+            numColumns="3"
+            itemSize="[350,326]"
+            itemSpacing="[25,35]"
+            drawFocusFeedback="true"
+            vertFocusAnimationStyle="fixedFocus"
+            focusBitmapUri="pkg:/images/focus-glow-padding-30.$$RES$$.9.png"
+        />
+    </children>
+</component>

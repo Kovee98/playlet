@@ -16,6 +16,7 @@
   } from "lib/Stores";
   import BottomNavigation from "lib/BottomNavigation.svelte";
   import HomeScreen from "lib/Screens/HomeScreen.svelte";
+  import SubscriptionsScreen from "lib/Screens/SubscriptionsScreen.svelte";
   import type { AppState } from "lib/Types";
   import SearchScreen from "lib/Screens/SearchScreen.svelte";
   import SettingsScreen from "lib/Screens/SettingsScreen.svelte";
@@ -83,6 +84,8 @@
     <SearchScreen visibility={currentScreen == "search"} />
 
     <HomeScreen visibility={currentScreen == "home"} />
+
+    <SubscriptionsScreen visibility={currentScreen == "subscriptions"} />
 
     <BookmarksScreen visibility={currentScreen == "bookmarks"} />
 

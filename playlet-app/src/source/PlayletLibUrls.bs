@@ -1,13 +1,18 @@
 namespace PlayletLibUrls
 
-    const RELEASE_URL_PATTERN = "^https://github\.com/iBicha/playlet/releases/download/v(\d+\.\d+\.\d+)/"
+    const RELEASE_URL_PATTERN = "^https://github\.com/(?:iBicha|Kovee98)/playlet/releases/download/v(\d+\.\d+\.\d+)/"
+
+    function MigrateUpstreamUrl(link as string) as string
+        pattern = CreateObject("roRegex", "^https://github\.com/iBicha/playlet/releases/", "i")
+        return pattern.Replace(link, "https://github.com/Kovee98/playlet/releases/")
+    end function
 
     ' v0.11.0 is the first release without HomeGridScreen, which still crashes on the devices
     ' pinned to v0.7.0 - v0.10.3.
     const MIN_VERSION = "0.11.0"
 
     function IsUnsupported(entry as object) as boolean
-        matches = CreateObject("roRegex", RELEASE_URL_PATTERN, "").Match(entry.link)
+        matches = CreateObject("roRegex", RELEASE_URL_PATTERN, "i").Match(entry.link)
         if matches.Count() <> 2
             return false
         end if

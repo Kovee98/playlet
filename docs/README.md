@@ -180,8 +180,21 @@ These are useful to see if the files and caching are working as expected.
 
 ### Releases from Github
 
-Since Component Libraries are simply zip/squashfs files hosted at some HTTPS endpoint, Github releases are used to host and deliver Playet Lib to users. By default, Playlet grabs `https://github.com/iBicha/playlet/releases/latest/download/playlet-lib.squashfs.pkg` and loads it, but this can be pointed to somewhere else, if for some reason the Github repository becomes unavailable.
+Since Component Libraries are simply zip/squashfs files hosted at some HTTPS endpoint, GitHub releases are used to host and deliver Playlet Lib to users. This fork loads `https://github.com/Kovee98/playlet/releases/latest/download/playlet-lib.squashfs.pkg` by default, then tries `playlet-lib.zip` from the same release before falling back to the embedded library.
 Squashfs files are faster to load, but they require signing. Zip files can be used without signing if they are served from an HTTPS endpoint.
+
+The update checker and web library-version picker also use `Kovee98/playlet`.
+Previously saved upstream release URLs are migrated to this fork while preserving
+their tag and asset; unrelated custom URLs are unchanged. If a pinned tag is not
+published in the fork, reset **Playlet Library version** to **Latest (default)**
+in web Settings.
+
+Remote loading requires a public, non-prerelease GitHub release with
+`playlet-lib.zip` (and optionally the signed `playlet-lib.squashfs.pkg`) attached.
+Pushing source code alone does not publish these assets, and the existing Canary
+workflow creates a prerelease that GitHub's `/releases/latest` URL does not select.
+Development builds continue to use the local library server and embedded fallback,
+not GitHub releases. Rebuild and redeploy the app shell to change its default URLs.
 
 ### Dev library hosted by VS Code Extension
 
@@ -219,6 +232,38 @@ Additionally each feed has information on how it is fetched. For now, only Invid
 Invidious API definitions are defined under [playlet-lib/src/config/invidious_video_api.yaml](/playlet-lib/src/config/invidious_video_api.yaml), and Playlet parses these at runtime and make the right API calls to fetch the data.
 
 Finally, this layout system is what allows both the BrightScript app and the Web app to display the same homepage.
+
+### Subscriptions tab
+
+The Roku sidebar and web companion navigation include a dedicated **Subscriptions**
+tab. It shows the selected profile's subscription video feed, independently of
+which sections are enabled on Home. Videos use the existing playback, queue,
+channel, and bookmark actions. Unlike Home's horizontal rows, Subscriptions uses
+a three-column, vertically scrolling grid on Roku and a responsive video grid on
+the web. A second sidebar, between the main navigation and the video grid, lists
+**All** followed by the selected profile's subscribed channels with their logos,
+ordered by most recent upload. Channels without uploads appear at the bottom.
+Upload dates come from YouTube's public channel feeds and are cached for five
+minutes; the first load may take longer for accounts with many subscriptions.
+If a date cannot be checked, that channel appears last and a warning offers a retry.
+Focus a channel with the Roku remote (or hover, focus, or click it on the web) to show that
+channel's uploads, newest first. **All** restores the combined subscription feed.
+Moving down the grid loads more videos; the web also offers **Load more**.
+
+Sign in or activate a profile through Profiles first. YouTube sign-in must be
+completed on the Roku; Invidious profiles use their configured server. Use
+**Refresh** to fetch the channel list and current feed again after subscribing
+to a channel. Returning to the tab also reloads them. On Roku, Right moves from
+the channel list into the video grid; Left at the grid's first column returns
+to the channel list, and another Left returns to the main navigation.
+
+To smoke-test, check the tab signed out, signed in, after switching profiles, and
+with an expired session. Verify the sidebar includes channels even when they have
+no recent uploads, logos have a fallback when unavailable, and channel order reflects
+the latest upload across the complete list. Focus two different channels, check newest-first
+ordering and pagination within each channel, then return to All. Verify playback/queue actions, refresh
+after a subscription change, and disable Subscriptions in Home's layout to confirm
+the dedicated tab remains available.
 
 ## Testing
 

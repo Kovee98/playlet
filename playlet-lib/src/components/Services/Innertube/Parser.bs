@@ -6,6 +6,26 @@ import "pkg:/source/utils/Types.bs"
 
 namespace Innertube
 
+    function ParseSubscriptionChannelsFeeds(feeds as object) as object
+        channels = []
+        seen = {}
+        continuation = ""
+        for each feed in feeds
+            for each item in feed.items
+                if item.type = "channel" and not StringUtils.IsNullOrEmpty(item.authorId)
+                    if not seen.DoesExist(item.authorId)
+                        channels.Push(item)
+                        seen[item.authorId] = true
+                    end if
+                end if
+            end for
+            if not StringUtils.IsNullOrEmpty(feed.continuation)
+                continuation = feed.continuation
+            end if
+        end for
+        return { items: channels, continuation: continuation }
+    end function
+
     function ParseResponseDataForFeeds(responseData as object, context as object) as object
         if responseData = invalid
             return []

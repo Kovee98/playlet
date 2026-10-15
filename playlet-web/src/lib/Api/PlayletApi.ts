@@ -49,6 +49,9 @@ export class PlayletApi {
     static async invidiousAuthenticatedRequest(feedSource) {
         const url = PlayletApi.host() + "/invidious/authenticated-request?feed-source=" + encodeURIComponent(JSON.stringify(feedSource));
         const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Failed to load authenticated feed (HTTP ${response.status})`);
+        }
         return await response.json();
     }
 
@@ -220,20 +223,20 @@ export class PlayletApi {
 
     static playletLibUrlsForTag(tag: string) {
         const urls = [{
-            link: `https://github.com/iBicha/playlet/releases/download/${tag}/playlet-lib.squashfs.pkg`,
+            link: `https://github.com/Kovee98/playlet/releases/download/${tag}/playlet-lib.squashfs.pkg`,
             type: 'custom'
         }, {
-            link: `https://github.com/iBicha/playlet/releases/download/${tag}/playlet-lib.zip`,
+            link: `https://github.com/Kovee98/playlet/releases/download/${tag}/playlet-lib.zip`,
             type: 'custom'
         }]
         // When an official release is out, it replaces the current canary release.
         // To avoid the "not found" error, we fallback to the default "latest" release.
         if (tag === "canary") {
             urls.push({
-                link: `https://github.com/iBicha/playlet/releases/latest/download/playlet-lib.squashfs.pkg`,
+                link: `https://github.com/Kovee98/playlet/releases/latest/download/playlet-lib.squashfs.pkg`,
                 type: 'custom'
             }, {
-                link: `https://github.com/iBicha/playlet/releases/latest/download/playlet-lib.zip`,
+                link: `https://github.com/Kovee98/playlet/releases/latest/download/playlet-lib.zip`,
                 type: 'custom'
             })
         }

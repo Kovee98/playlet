@@ -11,7 +11,7 @@ function ExecuteJob() as void
 end function
 
 function GetLatestPlayletLibVersionFromGithubReleases(cancellation as dynamic) as string
-    response = HttpClient.Head("https://github.com/iBicha/playlet/releases/latest").Cancellation(cancellation).Await()
+    response = HttpClient.Head("https://github.com/Kovee98/playlet/releases/latest").Cancellation(cancellation).Await()
 
     if response.StatusCode() = 200
         headers = response.Headers()

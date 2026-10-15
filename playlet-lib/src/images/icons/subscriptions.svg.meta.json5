@@ -1,0 +1,11 @@
+{
+  inputHash: '39abab0365fea86ffd63657a99e0f64d',
+  outputs: [
+    {
+      outputFilePath: 'images/icons/subscriptions.png',
+      outputHash: '7831a85151d80e9e05ccfe2122ee8bbf',
+      width: 48,
+      height: 48,
+    },
+  ],
+}

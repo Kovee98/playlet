@@ -32,6 +32,23 @@ namespace Registry
         end if
         ' bs:disable-next-line NO_PARSE_JSON
         urls = ParseJson(urlsJson)
+        if urls = invalid
+            return invalid
+        end if
+        changed = false
+        for each entry in urls
+            link = PlayletLibUrls.MigrateUpstreamUrl(entry.link)
+            if link <> entry.link
+                entry.link = link
+                changed = true
+            end if
+        end for
+        if changed
+            sec = CreateObject("roRegistrySection", "Playlet")
+            sec.Write("playlet_lib_urls", FormatJson(urls))
+            sec.Flush()
+            Logger.Log("Migrated saved Playlet library URLs to Kovee98/playlet")
+        end if
         return urls
     end function
 

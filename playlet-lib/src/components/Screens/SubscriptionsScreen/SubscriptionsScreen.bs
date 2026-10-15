@@ -1,0 +1,357 @@
+import "pkg:/components/ChannelView/ChannelUtils.bs"
+import "pkg:/components/ContentNode/ProfileContentAuthTokenUtils.types.bs"
+import "pkg:/components/ContextMenu/ContextMenuUtils.bs"
+import "pkg:/components/JobSystem/Jobs.bs"
+import "pkg:/components/JobSystem/JobSystem.bs"
+import "pkg:/components/Navigation/LongPress.bs"
+import "pkg:/components/Navigation/Navigation.bs"
+import "pkg:/components/Services/Invidious/InvidiousToContentNode.bs"
+import "pkg:/components/VideoFeed/FeedLoadState.bs"
+import "pkg:/source/utils/FocusManagement.bs"
+import "pkg:/source/utils/Locale.bs"
+import "pkg:/source/utils/Logging.bs"
+import "pkg:/source/utils/RemoteKeys.bs"
+import "pkg:/source/utils/Types.bs"
+
+function Init()
+    m.grid = m.top.FindNode("grid")
+    m.status = m.top.FindNode("status")
+    m.refreshButton = m.top.FindNode("refreshButton")
+    m.channels = m.top.FindNode("channels")
+    m.channelsStatus = m.top.FindNode("channelsStatus")
+    m.feedTitle = m.top.FindNode("feedTitle")
+    m.selectedChannelId = ""
+    m.selectedChannelTitle = ""
+end function
+
+function OnNodeReady()
+    SetNavigation(invalid, RemoteKeys.Back, m.navBar)
+    SetNavigation(m.refreshButton, RemoteKeys.Left, m.channels)
+    SetNavigation(m.refreshButton, RemoteKeys.Down, m.grid)
+    m.grid.ObserveField("itemFocused", FuncName(OnItemFocused))
+    m.grid.ObserveField("itemSelected", FuncName(OnItemSelected))
+    m.channels.ObserveField("itemFocused", FuncName(OnChannelFocused))
+    m.top.ObserveField("onError", FuncName(OnFeedError))
+    m.refreshButton.ObserveField("buttonSelected", FuncName(OnRefreshSelected))
+    m.profilesService.ObserveField("currentProfileChanged", FuncName(OnProfileChanged))
+    m.top.ObserveField("visible", FuncName(OnVisibleChange))
+    InitializeLongPress(["OK"])
+    Refresh(invalid)
+end function
+
+function OnVisibleChange()
+    if m.top.visible
+        Refresh(invalid)
+    else
+        CancelLoad()
+        CancelChannelsLoad()
+    end if
+end function
+
+function OnProfileChanged()
+    m.selectedChannelId = ""
+    m.selectedChannelTitle = ""
+    Refresh(invalid)
+end function
+
+function OnRefreshSelected()
+    Refresh(invalid)
+end function
+
+function CancelLoad()
+    if m.loadJob <> invalid
+        m.loadJob.cancel = true
+        JobSystem.UnobserveCallback(m.loadJob)
+        m.loadJob = invalid
+    end if
+end function
+
+function CancelChannelsLoad()
+    if m.channelsJob <> invalid
+        m.channelsJob.cancel = true
+        JobSystem.UnobserveCallback(m.channelsJob)
+        m.channelsJob = invalid
+    end if
+end function
+
+function Refresh(_unused as dynamic) as void
+    CancelChannelsLoad()
+    profile = m.profilesService.currentProfile
+    profileId = ""
+    if profile <> invalid
+        profileId = profile.id
+    end if
+    if m.channelProfileId <> profileId or m.channels.content = invalid
+        m.channelProfileId = profileId
+        m.selectedChannelId = ""
+        m.selectedChannelTitle = ""
+        m.settingChannels = true
+        content = CreateObject("roSGNode", "ContentNode")
+        allItem = content.CreateChild("ContentNode")
+        allItem.title = Tr(Locale.Subscriptions.All)
+        allItem.id = ""
+        allItem.HDPosterUrl = "pkg:/images/icons/subscriptions.png"
+        m.channels.content = content
+        m.settingChannels = false
+    end if
+    m.channelsStatus.text = ""
+    m.channels.visible = false
+    RefreshFeed()
+    if not m.top.focusable or not m.top.visible
+        return
+    end if
+    m.channels.visible = true
+    m.channelsStatus.text = Tr(Locale.Subscriptions.Loading)
+    m.channelsJob = JobSystem.CreateCallback(OnChannelsLoaded)
+    JobSystem.QueueJob(m.jobQueue, Jobs.SubscriptionChannelsJob, { invidious: m.invidious }, m.channelsJob)
+end function
+
+function OnChannelsLoaded(event as object) as void
+    if m.channelsJob = invalid or event.GetNode() <> m.channelsJob.id
+        return
+    end if
+    JobSystem.UnobserveCallback(event.GetRoSGNode())
+    m.channelsJob = invalid
+    info = event.GetInfo()
+    if info.cancel
+        return
+    end if
+    if not info.success
+        LogError("Failed to load subscription channels:", info.error)
+        m.channelsStatus.text = Tr(Locale.Subscriptions.ChannelsError)
+        return
+    end if
+    m.settingChannels = true
+    selectedIndex = 0
+    content = CreateObject("roSGNode", "ContentNode")
+    allItem = content.CreateChild("ContentNode")
+    allItem.title = Tr(Locale.Subscriptions.All)
+    allItem.HDPosterUrl = "pkg:/images/icons/subscriptions.png"
+    for each channel in info.data.channels
+        item = content.CreateChild("ContentNode")
+        item.id = channel.authorId
+        item.title = ValidString(channel.author)
+        item.HDPosterUrl = InvidiousContent.GetChannelThumbnail(channel.authorThumbnails)
+        if item.title = ""
+            item.title = channel.authorId
+        end if
+        if item.id = m.selectedChannelId
+            selectedIndex = content.GetChildCount() - 1
+            m.selectedChannelTitle = item.title
+        end if
+    end for
+    m.channels.content = content
+    m.channels.jumpToItem = selectedIndex
+    m.settingChannels = false
+    m.channelsStatus.text = ""
+    if info.data.uploadDatesIncomplete = true
+        m.channelsStatus.text = Tr(Locale.Subscriptions.UploadDatesIncomplete)
+    end if
+    if selectedIndex = 0 and m.selectedChannelId <> ""
+        m.selectedChannelId = ""
+        m.selectedChannelTitle = ""
+        RefreshFeed()
+    end if
+end function
+
+function OnChannelFocused() as void
+    if m.settingChannels
+        return
+    end if
+    item = m.channels.content.GetChild(m.channels.itemFocused)
+    if item <> invalid and item.id <> m.selectedChannelId
+        m.selectedChannelId = item.id
+        m.selectedChannelTitle = item.title
+        RefreshFeed()
+    end if
+end function
+
+function RefreshFeed() as void
+    CancelLoad()
+    profile = m.profilesService.currentProfile
+    hasProfile = profile <> invalid
+    needsReauth = false
+    if hasProfile
+        needsReauth = profile.authState = ProfileContentAuthTokenUtils.ProfileAuthState.NeedsReauth
+    end if
+
+    m.top.focusable = hasProfile and not needsReauth
+    m.refreshButton.visible = m.top.focusable
+    m.grid.visible = false
+    m.grid.focusable = false
+    m.grid.content = CreateObject("roSGNode", "ContentNode")
+    m.status.visible = true
+    m.feedFailed = false
+
+    if not hasProfile
+        m.status.text = Tr(Locale.Subscriptions.SignIn)
+    else if needsReauth
+        m.status.text = Tr(Locale.Dialogs.ProfileNeedsReauthMessage)
+    else
+        m.status.text = Tr(Locale.Subscriptions.Loading)
+    end if
+
+    if not m.top.focusable or not m.top.visible
+        if m.top.IsInFocusChain()
+            NodeSetFocus(m.navBar, true)
+        end if
+        return
+    end if
+
+    m.feed = CreateObject("roSGNode", "FeedContentNode")
+    m.feed.title = Tr(Locale.Feed.Subscriptions)
+    m.feed.loadState = FeedLoadState.None
+    m.feed.feedSourcesIndex = 0
+    source = {
+        id: "inv_auth_feed"
+        title: Tr(Locale.Feed.Subscriptions)
+        apiType: "Invidious"
+        endpoint: "auth_feed"
+        state: { loadState: FeedLoadState.None }
+    }
+    m.feedTitle.text = Tr(Locale.Subscriptions.All)
+    if m.selectedChannelId <> ""
+        source.id = "subscription_channel"
+        source.endpoint = "channel_videos"
+        source.pathParams = { ucid: m.selectedChannelId }
+        source.queryParams = { sort_by: "newest" }
+        m.feedTitle.text = m.selectedChannelTitle
+    end if
+    m.feed.feedSources = [source]
+    LoadNextPage()
+    if m.grid.IsInFocusChain()
+        NodeSetFocus(m.refreshButton, true)
+    end if
+end function
+
+function LoadNextPage() as void
+    if m.loadJob <> invalid or not m.top.visible or m.feed = invalid
+        return
+    end if
+    if m.feed.loadState <> FeedLoadState.None and m.feed.loadState <> FeedLoadState.LoadedPage
+        return
+    end if
+    m.feed.loadState = FeedLoadState.Loading
+    m.loadJob = JobSystem.CreateCallback(OnPageLoaded)
+    JobSystem.QueueJob(m.jobQueue, Jobs.VideoRowListRowContentJob, {
+        rowList: m.top
+        feedContentNode: m.feed
+        invidious: m.invidious
+    }, m.loadJob)
+end function
+
+function OnPageLoaded(event as object) as void
+    if m.loadJob = invalid or event.GetNode() <> m.loadJob.id
+        return
+    end if
+    JobSystem.UnobserveCallback(event.GetRoSGNode())
+    m.loadJob = invalid
+    if event.GetInfo().cancel
+        return
+    end if
+
+    content = m.grid.content
+    for index = content.GetChildCount() to m.feed.GetChildCount() - 1
+        content.AppendChild(m.feed.GetChild(index).Clone(false))
+    end for
+    hasVideos = content.GetChildCount() > 0
+    m.grid.visible = hasVideos
+    m.grid.focusable = hasVideos
+    m.status.visible = not hasVideos or m.feedFailed
+    if not m.feedFailed and not hasVideos
+        if m.selectedChannelId = ""
+            m.status.text = Tr(Locale.Subscriptions.Empty)
+        else
+            m.status.text = Tr(Locale.Subscriptions.ChannelEmpty)
+        end if
+    end if
+end function
+
+function OnFeedError()
+    m.feedFailed = true
+    m.status.text = Tr(Locale.Dialogs.FailedToLoadFeed)
+    m.status.visible = true
+end function
+
+function OnItemFocused()
+    if m.grid.itemFocused >= m.grid.content.GetChildCount() - 6
+        LoadNextPage()
+    end if
+end function
+
+function OnItemSelected()
+    LongPressHandler(RemoteKeys.Ok, true)
+end function
+
+function OnFocusChange()
+    if m.top.focus
+        NodeSetFocus(m.channels, true)
+    end if
+end function
+
+function OnKeyEvent(key as string, press as boolean) as boolean
+    if m.grid.IsInFocusChain()
+        if key = RemoteKeys.Back and press
+            NodeSetFocus(m.channels, true)
+            return true
+        end if
+        if not (key = RemoteKeys.Ok and press)
+            if LongPressHandler(key, press)
+                return true
+            end if
+        end if
+        item = m.grid.content.GetChild(m.grid.itemFocused)
+        if key = RemoteKeys.OkLongPress and press
+            ContextMenuUtils.Open([m.top, m.bookmarksService], m.appController, item)
+            return true
+        else if key = RemoteKeys.Ok and not press
+            PlayVideo(item)
+            return true
+        else if key = RemoteKeys.Left and press and m.grid.itemFocused mod 3 = 0
+            NodeSetFocus(m.channels, true)
+            return true
+        else if key = RemoteKeys.Up and press and m.grid.itemFocused < 3
+            NodeSetFocus(m.refreshButton, true)
+            return true
+        end if
+    end if
+    if m.channels.IsInFocusChain() and press
+        if key = RemoteKeys.Left
+            NodeSetFocus(m.navBar, true)
+            return true
+        else if key = RemoteKeys.Right
+            if m.grid.focusable
+                NodeSetFocus(m.grid, true)
+            else
+                NodeSetFocus(m.refreshButton, true)
+            end if
+            return true
+        end if
+    end if
+    return NavigationKeyHandler(key, press).handled
+end function
+
+function PlayVideo(item as object)
+    m.videoQueue.playVideo = item
+end function
+
+function QueueVideo(item as object)
+    m.videoQueue@.FuncAddToQueueVideo(item)
+end function
+
+function OpenVideoChannel(item as object)
+    channel = InvidiousContent.ToChannelContentNode(invalid, { authorId: item.authorId })
+    ChannelUtils.Open(channel)
+end function
+
+function GetContextMenuOptionsForItem(item as object) as object
+    options = [
+        ContextMenuUtils.CreateOption(Tr(Locale.ContextMenu.PlayVideo), m.top, "PlayVideo", [item])
+        ContextMenuUtils.CreateOption(Tr(Locale.ContextMenu.QueueVideo), m.top, "QueueVideo", [item])
+    ]
+    if not StringUtils.IsNullOrEmpty(item.authorId)
+        options.Push(ContextMenuUtils.CreateOption(Tr(Locale.ContextMenu.OpenChannel), m.top, "OpenVideoChannel", [item]))
+    end if
+    options.Push(ContextMenuUtils.CreateOption(Tr(Locale.Buttons.Refresh), m.top, "Refresh", [invalid]))
+    return options
+end function

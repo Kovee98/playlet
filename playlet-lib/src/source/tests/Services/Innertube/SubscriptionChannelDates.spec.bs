@@ -1,0 +1,69 @@
+import "pkg:/source/utils/SubscriptionChannelsUtils.bs"
+
+namespace Tests
+
+    @suite
+    class SubscriptionChannelDatesTests extends Rooibos.BaseTestSuite
+
+        @describe("Subscription upload dates")
+
+        @it("uses video publication dates, not channel creation or video update dates")
+        function _()
+            result = SubscriptionChannelsUtils.ParseLatestUpload(`<feed xmlns="http://www.w3.org/2005/Atom">
+                <published>2010-01-01T00:00:00Z</published>
+                <entry><published>2024-01-01T00:00:00Z</published><updated>2026-01-01T00:00:00Z</updated></entry>
+                <entry><published>2025-01-01T00:00:00Z</published></entry>
+            </feed>`)
+            m.assertEqual(result, 1735689600)
+        end function
+
+        @it("preserves second precision when applying a timezone offset")
+        function _()
+            result = SubscriptionChannelsUtils.ParseLatestUpload(`<feed>
+                <entry><published>2025-01-01T02:00:01+02:00</published></entry>
+            </feed>`)
+            m.assertEqual(result, 1735689601)
+        end function
+
+        @it("compares absolute times including timezone offsets")
+        function _()
+            result = SubscriptionChannelsUtils.ParseLatestUpload(`<feed>
+                <entry><published>2025-01-01T01:00:00+02:00</published></entry>
+                <entry><published>2025-01-01T00:00:00Z</published></entry>
+            </feed>`)
+            m.assertEqual(result, 1735689600)
+        end function
+
+        @it("distinguishes a channel with no uploads from a failed date lookup")
+        function _()
+            m.assertEqual(SubscriptionChannelsUtils.ParseLatestUpload("<feed></feed>"), 0)
+            m.assertInvalid(SubscriptionChannelsUtils.ParseLatestUpload("<html></html>"))
+            m.assertInvalid(SubscriptionChannelsUtils.ParseLatestUpload("not XML"))
+            m.assertInvalid(SubscriptionChannelsUtils.ParseLatestUpload("<feed><entry></entry></feed>"))
+            m.assertInvalid(SubscriptionChannelsUtils.ParseLatestUpload("<feed><entry><published>yesterday</published></entry></feed>"))
+            m.assertInvalid(SubscriptionChannelsUtils.ParseLatestUpload("<feed><entry><published>2025-13-01T00:00:00Z</published></entry></feed>"))
+            m.assertInvalid(SubscriptionChannelsUtils.ParseLatestUpload("<feed><entry><published>2025-01-01T00:00:00+99:00</published></entry></feed>"))
+        end function
+
+        @it("sorts the complete channel list with deterministic ties, no uploads, then failed dates")
+        function _()
+            result = SubscriptionChannelsUtils.Sort([
+                { authorId: "UC-idle", latestUploadTimestamp: 0 }
+                { authorId: "UC-old", latestUploadTimestamp: 100 }
+                { authorId: "UC-failed", latestUploadTimestamp: -1 }
+                { authorId: "UC-z", latestUploadTimestamp: 300 }
+                { authorId: "UC-new", latestUploadTimestamp: 500 }
+                { authorId: "UC-a", latestUploadTimestamp: 300 }
+            ])
+            m.assertEqual(result[0].authorId, "UC-new")
+            m.assertEqual(result[1].authorId, "UC-a")
+            m.assertEqual(result[2].authorId, "UC-z")
+            m.assertEqual(result[3].authorId, "UC-old")
+            m.assertEqual(result[4].authorId, "UC-idle")
+            m.assertEqual(result[5].authorId, "UC-failed")
+            m.assertEqual(SubscriptionChannelsUtils.Sort([]).Count(), 0)
+        end function
+
+    end class
+
+end namespace

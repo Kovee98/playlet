@@ -1,0 +1,21 @@
+import "pkg:/source/utils/Types.bs"
+
+function Init()
+    m.logo = m.top.FindNode("logo")
+    m.logo.ObserveField("loadStatus", FuncName(OnLogoStatus))
+end function
+
+function OnContentSet() as void
+    content = m.top.itemContent
+    if content = invalid
+        return
+    end if
+    m.top.FindNode("title").text = content.title
+    m.logo.uri = content.HDPosterUrl
+end function
+
+function OnLogoStatus() as void
+    if m.logo.loadStatus = "failed" and m.logo.uri <> "pkg:/images/icons/user-200.png"
+        m.logo.uri = "pkg:/images/icons/user-200.png"
+    end if
+end function

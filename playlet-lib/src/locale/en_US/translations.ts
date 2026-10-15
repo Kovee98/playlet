@@ -5,6 +5,38 @@
 <context>
     <name>default</name>
     <message>
+        <source>This channel has no videos yet.</source>
+        <translation>This channel has no videos yet.</translation>
+    </message>
+    <message>
+        <source>All</source>
+        <translation>All</translation>
+    </message>
+    <message>
+        <source>Failed to load subscribed channels. Select Refresh to try again.</source>
+        <translation>Failed to load subscribed channels. Select Refresh to try again.</translation>
+    </message>
+    <message>
+        <source>Some upload dates could not be checked. Those channels appear last. Select Refresh to retry.</source>
+        <translation>Some upload dates could not be checked. Those channels appear last. Select Refresh to retry.</translation>
+    </message>
+    <message>
+        <source>Sign in or activate a profile in Profiles to see videos from your subscribed channels.</source>
+        <translation>Sign in or activate a profile in Profiles to see videos from your subscribed channels.</translation>
+    </message>
+    <message>
+        <source>Loading subscriptions...</source>
+        <translation>Loading subscriptions...</translation>
+    </message>
+    <message>
+        <source>No subscription videos yet. Subscribe to channels to see their videos here.</source>
+        <translation>No subscription videos yet. Subscribe to channels to see their videos here.</translation>
+    </message>
+    <message>
+        <source>Use Profiles to activate an account. To sign in to YouTube, use your Roku device.</source>
+        <translation>Use Profiles to activate an account. To sign in to YouTube, use your Roku device.</translation>
+    </message>
+    <message>
         <source>Profile</source>
         <translation>Profile</translation>
     </message>

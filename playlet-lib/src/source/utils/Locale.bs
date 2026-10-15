@@ -53,6 +53,18 @@ namespace Locale
     end enum
 
     @locale
+    enum Subscriptions
+        All = "All"
+        SignIn = "Sign in or activate a profile in Profiles to see videos from your subscribed channels."
+        Loading = "Loading subscriptions..."
+        Empty = "No subscription videos yet. Subscribe to channels to see their videos here."
+        WebSignIn = "Use Profiles to activate an account. To sign in to YouTube, use your Roku device."
+        ChannelsError = "Failed to load subscribed channels. Select Refresh to try again."
+        UploadDatesIncomplete = "Some upload dates could not be checked. Those channels appear last. Select Refresh to retry."
+        ChannelEmpty = "This channel has no videos yet."
+    end enum
+
+    @locale
     enum Dialogs
         LoginToInvidious = "Login to Invidious"
         IpAddressNotAvailable = "IP address not available"

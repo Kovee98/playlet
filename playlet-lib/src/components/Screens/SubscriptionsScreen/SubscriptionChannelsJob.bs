@@ -1,0 +1,61 @@
+import "pkg:/components/Services/Invidious/InvidiousService.bs"
+import "pkg:/source/utils/SubscriptionChannelsUtils.bs"
+
+@job("SubscriptionChannelsJob")
+function ExecuteJob() as void
+    input = JobGetInput()
+    service = new Invidious.InvidiousService(input.invidious)
+    channels = []
+    seen = {}
+    continuations = {}
+    continuation = ""
+    uploadDatesIncomplete = false
+    while true
+        if JobIsCancelled()
+            JobCancel()
+            return
+        end if
+        response = service.MakeRequest({
+            id: "subscription_channels"
+            endpoint: "auth_subscriptions"
+            state: {}
+        }, {
+            additionalQueryParams: { continuation: continuation }
+            cancellation: JobGetCancellation()
+        })
+        if not response.success
+            JobError(response.error)
+            return
+        end if
+        if not IsArray(response.result.items)
+            JobError("Invalid subscription channel list")
+            return
+        end if
+        if response.result.uploadDatesIncomplete = true
+            uploadDatesIncomplete = true
+        end if
+        for each channel in response.result.items
+            if not StringUtils.IsNullOrEmpty(channel.authorId) and not seen.DoesExist(channel.authorId)
+                seen[channel.authorId] = true
+                channels.Push(channel)
+            end if
+        end for
+        continuation = ValidString(response.result.continuation)
+        if continuation = ""
+            exit while
+        end if
+        if continuations.DoesExist(continuation)
+            JobError("Repeated subscription channel continuation")
+            return
+        end if
+        continuations[continuation] = true
+    end while
+    if JobIsCancelled()
+        JobCancel()
+        return
+    end if
+    JobSuccessData({
+        channels: SubscriptionChannelsUtils.Sort(channels)
+        uploadDatesIncomplete: uploadDatesIncomplete
+    })
+end function

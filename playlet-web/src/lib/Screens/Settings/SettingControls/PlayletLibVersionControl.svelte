@@ -49,9 +49,9 @@
       const release = releases[i].name;
       if (
         libUrl ===
-          `https://github.com/iBicha/playlet/releases/download/${release}/playlet-lib.zip` ||
+          `https://github.com/Kovee98/playlet/releases/download/${release}/playlet-lib.zip` ||
         libUrl ===
-          `https://github.com/iBicha/playlet/releases/download/${release}/playlet-lib.squashfs.pkg`
+          `https://github.com/Kovee98/playlet/releases/download/${release}/playlet-lib.squashfs.pkg`
       ) {
         selectedRelease = release;
         break;
@@ -65,7 +65,7 @@
     const perPage = 100;
     while (true) {
       const response = await fetch(
-        `https://api.github.com/repos/iBicha/playlet/releases?per_page=${perPage}&page=${page++}`
+        `https://api.github.com/repos/Kovee98/playlet/releases?per_page=${perPage}&page=${page++}`
       );
       const responseReleases = await response.json();
       releases.push(...responseReleases);

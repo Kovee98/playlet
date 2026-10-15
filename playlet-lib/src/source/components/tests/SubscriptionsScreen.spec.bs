@@ -1,0 +1,108 @@
+import "pkg:/components/ContentNode/ProfileContentAuthTokenUtils.types.bs"
+
+namespace Tests
+
+    @SGNode("SubscriptionsScreen")
+    @suite
+    class SubscriptionsScreenTests extends Rooibos.BaseTestSuite
+
+        protected override function beforeEach()
+            m.node.profilesService = CreateObject("roSGNode", "Node")
+            m.node.profilesService.AddField("currentProfile", "node", false)
+            m.node.loadJob = invalid
+            m.node.channelsJob = invalid
+            m.node.feed = invalid
+            m.node.feedFailed = false
+            m.top.visible = false
+            m.node.grid.content = CreateObject("roSGNode", "ContentNode")
+        end function
+
+        @describe("Subscriptions grid")
+
+        @it("shows sign-in guidance without requesting an unauthenticated feed")
+        function _()
+            m.top@.Refresh(0)
+
+            m.assertFalse(m.top.focusable)
+            m.assertFalse(m.node.grid.visible)
+            m.assertTrue(m.node.status.visible)
+            m.assertEqual(m.node.status.text, Tr(Locale.Subscriptions.SignIn))
+            m.assertInvalid(m.node.loadJob)
+        end function
+
+        @it("blocks expired profiles instead of showing their previous videos")
+        function _()
+            profile = CreateObject("roSGNode", "ProfileContentNode")
+            profile.authState = ProfileContentAuthTokenUtils.ProfileAuthState.NeedsReauth
+            m.node.profilesService.currentProfile = profile
+            m.node.grid.content.CreateChild("ContentNode")
+
+            m.top@.Refresh(0)
+
+            m.assertEqual(m.node.grid.content.GetChildCount(), 0)
+            m.assertEqual(m.node.status.text, Tr(Locale.Dialogs.ProfileNeedsReauthMessage))
+            m.assertFalse(m.top.focusable)
+            m.assertInvalid(m.node.loadJob)
+        end function
+
+        @it("uses a multi-row three-column grid rather than a horizontal Home row")
+        function _()
+            m.assertEqual(m.node.grid.Subtype(), "MarkupGrid")
+            m.assertEqual(m.node.grid.numColumns, 3)
+            m.assertEqual(m.node.grid.numRows, 2)
+            m.assertEqual(m.node.channels.Subtype(), "MarkupList")
+            m.assertEqual(m.node.channels.itemComponentName, "SubscriptionChannelItem")
+            m.assertTrue(m.node.channels.translation[0] < m.node.grid.translation[0])
+        end function
+
+        @it("does not request a hidden profile feed")
+        function _()
+            profile = CreateObject("roSGNode", "ProfileContentNode")
+            profile.authState = ProfileContentAuthTokenUtils.ProfileAuthState.Authenticated
+            m.node.profilesService.currentProfile = profile
+
+            m.top@.Refresh(0)
+
+            m.assertTrue(m.top.focusable)
+            m.assertFalse(m.node.grid.focusable)
+            m.assertInvalid(m.node.loadJob)
+        end function
+
+        @it("cancels the previous profile request before refreshing")
+        function _()
+            pendingJob = CreateObject("roSGNode", "JobCallback")
+            m.node.loadJob = pendingJob
+
+            m.top@.Refresh(0)
+
+            m.assertTrue(pendingJob.cancel)
+            m.assertInvalid(m.node.loadJob)
+        end function
+
+        @it("cancels the previous profile's channel list request before refreshing")
+        function _()
+            pendingJob = CreateObject("roSGNode", "JobCallback")
+            m.node.channelsJob = pendingJob
+
+            m.top@.Refresh(0)
+
+            m.assertTrue(pendingJob.cancel)
+            m.assertInvalid(m.node.channelsJob)
+        end function
+
+        @it("clears old videos when signed out")
+        function _()
+            m.node.grid.content.CreateChild("ContentNode")
+
+            m.top@.Refresh(0)
+
+            m.assertEqual(m.node.grid.content.GetChildCount(), 0)
+            m.assertFalse(m.node.grid.visible)
+            m.assertEqual(m.node.channels.content.GetChildCount(), 1)
+            m.assertEqual(m.node.channels.content.GetChild(0).title, Tr(Locale.Subscriptions.All))
+            m.assertEqual(m.node.channels.content.GetChild(0).HDPosterUrl, "pkg:/images/icons/subscriptions.png")
+        end function
+
+    end class
+
+end namespace

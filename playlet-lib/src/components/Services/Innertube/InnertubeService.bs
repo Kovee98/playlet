@@ -353,6 +353,14 @@ namespace InnertubeService
         return GetBrowseAuthenticatedPage("FEsubscriptions", options)
     end function
 
+    function GetSubscriptionChannels(options = invalid as object) as object
+        result = GetBrowseAuthenticatedPage("FEchannels", options)
+        if result.error <> invalid
+            return result
+        end if
+        return Innertube.ParseSubscriptionChannelsFeeds(result.feeds)
+    end function
+
     function GetWatchHistory(options = invalid as object) as object
         return GetBrowseAuthenticatedPage("FEhistory", options)
     end function
@@ -380,7 +388,12 @@ namespace InnertubeService
             }
         end if
 
-        feeds = Innertube.ParseResponseDataForFeeds(response.Json(), {
+        json = response.Json()
+        error = Innertube.ParseResponseDataForError(json)
+        if error <> ""
+            return { error: error }
+        end if
+        feeds = Innertube.ParseResponseDataForFeeds(json, {
             request: request
             disableShorts: disableShorts
             browseId: browseId
@@ -562,6 +575,21 @@ namespace InnertubeService
         end if
 
         return result
+    end function
+
+    function GetChannelVideosNewest(channelId as string, options as object) as object
+        if StringUtils.IsNullOrEmpty(options.continuation) and StringUtils.IsNullOrEmpty(options.params)
+            channel = GetChannel(channelId, options)
+            if channel.error <> invalid
+                return channel
+            end if
+            params = ObjectUtils.Dig(channel, ["tabsParams", "videos"])
+            if StringUtils.IsNullOrEmpty(params)
+                return { items: [] }
+            end if
+            options.params = params
+        end if
+        return GetChannel(channelId, options)
     end function
 
     function GetSubscriptionStatusForChannel(channelId as string, options = invalid as object) as object

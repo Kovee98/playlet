@@ -66,7 +66,7 @@
       case "app_version":
       case "lib_version":
       case "lib_version_latest":
-        return `https://github.com/iBicha/playlet/releases/tag/v${encodeURIComponent(value)}`;
+        return `https://github.com/Kovee98/playlet/releases/tag/v${encodeURIComponent(value)}`;
       case "lib_url":
         return /^https?:\/\//.test(value) ? value : undefined;
       case "app_git_commit_hash":
@@ -74,7 +74,7 @@
         if (value === "unknown") {
           return undefined;
         }
-        return `https://github.com/iBicha/playlet/commit/${encodeURIComponent(value)}`;
+        return `https://github.com/Kovee98/playlet/commit/${encodeURIComponent(value)}`;
       default:
         return undefined;
     }

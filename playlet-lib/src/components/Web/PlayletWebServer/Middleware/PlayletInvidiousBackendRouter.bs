@@ -118,7 +118,17 @@ namespace Http
                 return true
             end if
 
-            response.Json([])
+            result = InnertubeService.GetSubscriptionChannels({
+                accessToken: accessToken
+                onBehalfOfUser: request.query.activeIdentifyToken
+                continuation: request.query.continuation
+            })
+            if result.error <> invalid
+                response.Json(result)
+                response.http_code = 500
+                return true
+            end if
+            response.Json(result)
             return true
         end function
 
@@ -803,7 +813,11 @@ namespace Http
                     end if
                 end if
 
-                channel = InnertubeService.GetChannel(channelId, options)
+                if _tab = "videos" and sortBy = "newest"
+                    channel = InnertubeService.GetChannelVideosNewest(channelId, options)
+                else
+                    channel = InnertubeService.GetChannel(channelId, options)
+                end if
                 if raw
                     response.Json(channel)
                     return true

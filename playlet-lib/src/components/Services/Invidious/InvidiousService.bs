@@ -10,6 +10,7 @@ import "pkg:/source/utils/OptionUtils.bs"
 import "pkg:/source/utils/OptionUtils.bs"
 import "pkg:/source/utils/RegistryUtils.bs"
 import "pkg:/source/utils/StringUtils.bs"
+import "pkg:/source/utils/SubscriptionChannelsUtils.bs"
 import "pkg:/source/utils/TimeUtils.bs"
 
 namespace Invidious
@@ -370,6 +371,7 @@ namespace Invidious
                 feedSource: feedSource
                 response: response
                 profile: profile
+                cancellation: cancellation
             })
 
             if result <> invalid
@@ -428,6 +430,15 @@ namespace Invidious
                 }
             end if
             return json
+        end function
+
+        function SubscriptionChannelsHandler(context as object) as object
+            result = m.DefaultHandler(context)
+            if result = invalid or not IsArray(result.items)
+                return invalid
+            end if
+            result.uploadDatesIncomplete = SubscriptionChannelsUtils.AddUploadDates(result.items, context.cancellation)
+            return result
         end function
 
         function PlaylistHandler(context as object) as object

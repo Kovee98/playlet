@@ -1,0 +1,11 @@
+<component name="SubscriptionChannelItem" extends="Group">
+    <interface>
+        <field id="itemContent" type="node" onChange="OnContentSet" />
+    </interface>
+    <children>
+        <Poster id="logo" width="36" height="36" translation="[6,6]" loadDisplayMode="scaleToFit" />
+        <Label id="title" width="187" height="48" translation="[52,0]" vertAlign="center">
+            <Font role="font" uri="font:SystemFontFile" size="20" />
+        </Label>
+    </children>
+</component>

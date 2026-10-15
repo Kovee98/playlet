@@ -7,6 +7,7 @@
   import { getFormattedPluralString } from "lib/Api/Locale";
 
   export let title: string | undefined = undefined;
+  export let fullWidth = false;
   export let videoId: string | undefined = undefined;
   export let author: string | undefined = undefined;
   export let videoThumbnails: any[] | undefined = undefined;
@@ -190,7 +191,7 @@
 </script>
 
 <button
-  class="w-80 p-2"
+  class="{fullWidth ? 'w-full' : 'w-80'} p-2"
   on:click={() => {
     videoModal.show();
   }}

@@ -64,6 +64,11 @@ function ExecuteJob() as void
                 cancellation: cancellation
             })
 
+            if JobIsCancelled()
+                JobCancel()
+                return
+            end if
+
             if not response.success
                 if RemoveSingleFailedRow(response.error, feedSource, feedSources, feedContentNode)
                     JobSuccess()

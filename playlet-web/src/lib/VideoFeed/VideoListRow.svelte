@@ -9,9 +9,14 @@
   import PlaylistCell from "./PlaylistCell.svelte";
   import ChannelCell from "./ChannelCell.svelte";
   import { ProfileAuthState } from "lib/Types";
+  import { onDestroy } from "svelte";
 
   // TODO:P1 figure out why some uncached feeds (e.g. channels/ucid/videos) get hit twice
   export let feed: any = undefined;
+  export let showStatus = false;
+  export let emptyMessage = "No subscription videos yet. Subscribe to channels to see their videos here.";
+  export let layout: "row" | "grid" = "row";
+  let loadError = false;
   let videos = [];
 
   enum FeedLoadState {
@@ -34,6 +39,7 @@
   let scrollEnd = 0;
 
   let loadDataTask = undefined;
+  let disposed = false;
 
   // w-80|w-60 p-2: 320px|240px + 16px padding on each side
   const videoItemWidth = 320 + 16 * 2;
@@ -53,6 +59,7 @@
     if (feed) {
       feedSourcesIndex = 0;
       feedLoadState = FeedLoadState.None;
+      loadError = false;
       videos = [];
       itemWidths = [];
       scrollStart = 0;
@@ -86,7 +93,7 @@
 
   let invidiousApi = new InvidiousApi();
 
-  playletStateStore.subscribe((value) => {
+  const unsubscribeState = playletStateStore.subscribe((value) => {
     invidiousApi.setInstance(value?.invidious?.instance);
     let userCountryCode = value?.device?.user_country_code;
     if (!userCountryCode || userCountryCode === "OT") {
@@ -102,12 +109,22 @@
     loadRow();
   });
 
-  invidiousVideoApiStore.subscribe((value) => {
+  const unsubscribeEndpoints = invidiousVideoApiStore.subscribe((value) => {
     invidiousApi.endpoints = value;
     loadRow();
   });
 
+  onDestroy(() => {
+    disposed = true;
+    intersectionObserver.disconnect();
+    unsubscribeState();
+    unsubscribeEndpoints();
+  });
+
   async function loadRow() {
+    if (disposed) {
+      return;
+    }
     if (!invidiousApi.canMakeRequest()) {
       return;
     }
@@ -116,7 +133,7 @@
       return;
     }
 
-    if (scrollEnd < videos.length - 3) {
+    if (layout === "row" && scrollEnd < videos.length - 3) {
       return;
     }
 
@@ -136,6 +153,8 @@
       await loadDataTask;
     } catch (error) {
       console.error(error);
+      loadError = true;
+      feedLoadState = FeedLoadState.Error;
     }
     loadDataTask = undefined;
   }
@@ -146,6 +165,9 @@
 
     while (true) {
       const feedSources = feed.feedSources;
+      if (disposed) {
+        return;
+      }
       if (feedSourcesIndex >= feedSources.length) {
         break;
       }
@@ -165,7 +187,11 @@
 
       try {
         const result = await invidiousApi.makeRequest(feedSource);
+        if (disposed) {
+          return;
+        }
         if (!result) {
+          loadError = true;
           feedSource.state.loadState = FeedLoadState.Error;
           feedSourcesIndex++;
           if (feedSourcesIndex >= feedSources.length) {
@@ -185,7 +211,7 @@
 
         if (items.length > 0) {
           const paginationType = feedSource.state.paginationType;
-          if (hadContinuation && !hasContinuation) {
+          if (result.isLastPage || (hadContinuation && !hasContinuation)) {
             feedSource.state.loadState = FeedLoadState.Loaded;
           } else if (paginationType === "Continuation" && hasContinuation) {
             feedSource.state.loadState = FeedLoadState.LoadedPage;
@@ -237,6 +263,7 @@
         // TODO:P0 handle case of popular feed disabled
         // If we're done loading all the feed, but still have no videos, hide the whole component.
         console.error(error);
+        loadError = true;
         feedSource.state.loadState = FeedLoadState.Error;
       }
     }
@@ -302,10 +329,33 @@
   Hide rows that are loaded but have no videos. Typically a 
   disabled feed (like popular) or unauthenticated. 
 -->
-{#if feedLoadState !== FeedLoadState.Loaded || videos.length !== 0}
+{#if showStatus}
+  <div class="m-4" role="status">
+    {#if loadError}
+      {$translate("Failed to load feed")}
+    {:else if feedLoadState === FeedLoadState.None || feedLoadState === FeedLoadState.Loading}
+      {$translate("Loading subscriptions...")}
+    {:else if feedLoadState === FeedLoadState.Loaded && videos.length === 0}
+      {$translate(emptyMessage)}
+    {/if}
+  </div>
+{/if}
+{#if feedLoadState !== FeedLoadState.Loaded || videos.length !== 0 || showStatus}
   <div class="text-lg font-semibold ml-4">
     {$translate(feed.title)}
   </div>
+  {#if layout === "grid"}
+    <div class="subscription-grid">
+      {#each videos as video}
+        <VideoCell {...video} fullWidth />
+      {/each}
+    </div>
+    <div bind:this={carouselElement} class="flex justify-center p-4">
+      {#if feedLoadState === FeedLoadState.LoadedPage && !loadError}
+        <button class="btn" on:click={loadRow}>{$translate("Load more")}</button>
+      {/if}
+    </div>
+  {:else}
   <div
     class="carousel carousel-center rounded-box w-full space-x-4"
     style="min-height: 16rem;"
@@ -328,4 +378,14 @@
       </div>
     {/each}
   </div>
+  {/if}
 {/if}
+
+<style>
+  .subscription-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+    gap: 1rem;
+    padding: 0 1rem;
+  }
+</style>

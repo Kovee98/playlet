@@ -1,0 +1,118 @@
+import "pkg:/source/services/HttpClient.bs"
+import "pkg:/source/utils/ArrayUtils.bs"
+import "pkg:/source/utils/CancellationUtils.bs"
+import "pkg:/source/utils/Logging.bs"
+import "pkg:/source/utils/MathUtils.bs"
+
+namespace SubscriptionChannelsUtils
+
+    function AddUploadDates(channels as object, cancellation as dynamic) as boolean
+        incomplete = false
+        for offset = 0 to channels.Count() - 1 step 4
+            pending = []
+            for index = offset to MathUtils.Min(offset + 3, channels.Count() - 1)
+                channel = channels[index]
+                channel.latestUploadTimestamp = -1
+                if IsString(channel.authorId) and channel.authorId <> ""
+                    request = HttpClient.Get("https://www.youtube.com/feeds/videos.xml")
+                    request.QueryParam("channel_id", channel.authorId).CacheForSeconds(300).AttemptTimeoutMs(8000).Cancellation(cancellation)
+                    pending.Push({ channel: channel, response: request.Send() })
+                else
+                    incomplete = true
+                    LogWarn("Cannot check subscription upload date: missing channel ID")
+                end if
+            end for
+            for each item in pending
+                response = item.response.Await()
+                if CancellationUtils.IsCancelled(cancellation)
+                    for each active in pending
+                        active.response.Cancel()
+                    end for
+                    return false
+                end if
+                timestamp = invalid
+                if response.IsSuccess()
+                    timestamp = ParseLatestUpload(response.Text())
+                end if
+                if timestamp = invalid
+                    incomplete = true
+                    if response.IsSuccess()
+                        LogWarn("Invalid channel upload feed:", item.channel.authorId)
+                    else
+                        LogWarn("Cannot check subscription upload date:", item.channel.authorId, response.ErrorMessage())
+                    end if
+                else
+                    item.channel.latestUploadTimestamp = timestamp
+                end if
+            end for
+        end for
+        return incomplete
+    end function
+
+    function ParseLatestUpload(text as string) as dynamic
+        feed = CreateObject("roXMLElement")
+        if not feed.Parse(text) or feed.GetName() <> "feed"
+            return invalid
+        end if
+        latest = 0
+        datePattern = CreateObject("roRegex", "^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2})$", "")
+        for each entry in feed.GetNamedElements("entry")
+            published = entry.GetNamedElements("published")
+            if published.Count() <> 1
+                return invalid
+            end if
+            value = published[0].GetText()
+            if not datePattern.IsMatch(value)
+                return invalid
+            end if
+            date = CreateObject("roDateTime")
+            ' Roku's parser ignores timezone offsets, so apply the Atom offset explicitly.
+            date.FromISO8601String(Left(value, 19) + ".000")
+            if Left(date.ToISOString(), 19) <> Left(value, 19)
+                return invalid
+            end if
+            timestamp = date.AsSeconds()
+            if Len(value) > 20
+                hours = Int(Val(Mid(value, 21, 2)))
+                minutes = Int(Val(Mid(value, 24, 2)))
+                if hours > 23 or minutes > 59
+                    return invalid
+                end if
+                offset = hours * 3600 + minutes * 60
+                if Mid(value, 20, 1) = "+"
+                    timestamp -= offset
+                else
+                    timestamp += offset
+                end if
+            end if
+            if timestamp <= 0
+                return invalid
+            end if
+            if timestamp > latest
+                latest = timestamp
+            end if
+        end for
+        return latest
+    end function
+
+    function Sort(channels as object) as object
+        ' Insert across the complete list, not separately sorted continuation pages.
+        sorted = []
+        for each channel in channels
+            index = 0
+            while index < sorted.Count()
+                previous = sorted[index]
+                if channel.latestUploadTimestamp > previous.latestUploadTimestamp
+                    exit while
+                end if
+                if channel.latestUploadTimestamp = previous.latestUploadTimestamp and channel.authorId < previous.authorId
+                    exit while
+                end if
+                index++
+            end while
+            ArrayUtils.Insert(sorted, channel, index)
+        end for
+        return sorted
+    end function
+
+end namespace

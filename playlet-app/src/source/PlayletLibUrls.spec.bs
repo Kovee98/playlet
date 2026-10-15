@@ -10,6 +10,7 @@ namespace Tests
         @params("https://github.com/iBicha/playlet/releases/download/v0.9.0/playlet-lib.zip")
         @params("https://github.com/iBicha/playlet/releases/download/v0.10.3/playlet-lib.zip")
         @params("https://github.com/iBicha/playlet/releases/download/v0.10.3/playlet-lib.squashfs.pkg")
+        @params("https://github.com/Kovee98/playlet/releases/download/v0.10.3/playlet-lib.zip")
         function _(link as string)
             m.assertTrue(PlayletLibUrls.IsUnsupported({ type: "custom", link: link }))
         end function
@@ -19,6 +20,7 @@ namespace Tests
         @params("https://github.com/iBicha/playlet/releases/download/v0.11.1/playlet-lib.zip")
         @params("https://github.com/iBicha/playlet/releases/download/v0.48.3/playlet-lib.squashfs.pkg")
         @params("https://github.com/iBicha/playlet/releases/download/v1.0.0/playlet-lib.zip")
+        @params("https://github.com/Kovee98/playlet/releases/download/v0.48.9/playlet-lib.zip")
         function _(link as string)
             m.assertFalse(PlayletLibUrls.IsUnsupported({ type: "custom", link: link }))
         end function
@@ -26,12 +28,34 @@ namespace Tests
         @it("reports nothing for a url that carries no version")
         @params("https://github.com/iBicha/playlet/releases/latest/download/playlet-lib.zip")
         @params("https://github.com/iBicha/playlet/releases/download/canary/playlet-lib.zip")
+        @params("https://github.com/Kovee98/playlet/releases/latest/download/playlet-lib.zip")
+        @params("https://github.com/Kovee98/playlet/releases/download/canary/playlet-lib.zip")
         @params("https://github.com/iBicha/playlet/releases/download/0.10.3/playlet-lib.zip")
         @params("http://192.168.1.10:8888/playlet-lib.zip")
         @params("pkg:/lib/playlet-lib.zip")
         @params("")
         function _(link as string)
             m.assertFalse(PlayletLibUrls.IsUnsupported({ type: "custom", link: link }))
+        end function
+
+        @describe("PlayletLibUrls.MigrateUpstreamUrl")
+
+        @it("moves saved upstream release URLs to the fork without changing their tag or asset")
+        @params("latest/download/playlet-lib.zip")
+        @params("latest/download/playlet-lib.squashfs.pkg")
+        @params("download/canary/playlet-lib.zip")
+        @params("download/v0.48.9/playlet-lib.squashfs.pkg")
+        function _(suffix as string)
+            m.assertEqual(PlayletLibUrls.MigrateUpstreamUrl("https://github.com/iBicha/playlet/releases/" + suffix), "https://github.com/Kovee98/playlet/releases/" + suffix)
+        end function
+
+        @it("leaves fork, embedded, development and unrelated custom URLs unchanged")
+        @params("https://github.com/Kovee98/playlet/releases/latest/download/playlet-lib.zip")
+        @params("https://example.com/playlet-lib.zip")
+        @params("http://192.168.1.10:8086/playlet-lib.zip")
+        @params("pkg:/lib/playlet-lib.zip")
+        function _(link as string)
+            m.assertEqual(PlayletLibUrls.MigrateUpstreamUrl(link), link)
         end function
 
         @describe("PlayletLibUrls.CompareVersions")

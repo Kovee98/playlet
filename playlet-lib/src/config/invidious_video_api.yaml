@@ -65,6 +65,13 @@ search:
   cacheSeconds: 300 # 5 minutes
 
 # Auth endpoints
+auth_subscriptions:
+  title: Subscriptions
+  url: /api/v1/auth/subscriptions
+  authenticated: true
+  responseHandler: SubscriptionChannelsHandler
+  paginationType: Continuation
+
 auth_feed:
   title: Subscriptions
   url: /api/v1/auth/feed

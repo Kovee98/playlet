@@ -5,6 +5,7 @@
   import SettingsIcon from "../assets/settings-icon.svg.svelte";
   import BookmarksIcon from "../assets/star-icon.svg.svelte";
   import RemoteIcon from "../assets/remote-control.svg.svelte";
+  import SubscriptionsIcon from "../assets/subscriptions-icon.svg.svelte";
 
   import { appStateStore, translate } from "lib/Stores";
   import { ScreenNames, type AppState } from "lib/Types";
@@ -84,6 +85,17 @@
       <HomeIcon />
     </div>
     <span class="text-xs">{$translate("Home")}</span>
+  </button>
+  <button
+    on:click={() => setScreen("subscriptions")}
+    class={$appStateStore.screen === "subscriptions" ? "active" : ""}
+    aria-label={$translate("Subscriptions")}
+    title={$translate("Subscriptions")}
+  >
+    <div class="h-6">
+      <SubscriptionsIcon />
+    </div>
+    <span class="text-xs hidden sm:inline">{$translate("Subscriptions")}</span>
   </button>
   <button
     on:click={() => setScreen("bookmarks")}

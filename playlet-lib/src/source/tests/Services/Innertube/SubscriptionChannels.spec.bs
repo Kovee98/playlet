@@ -1,0 +1,65 @@
+import "pkg:/components/Services/Innertube/Parser.bs"
+
+namespace Tests
+
+    @suite
+    class SubscriptionChannelsParserTests extends Rooibos.BaseTestSuite
+
+        @describe("Subscribed channel feed")
+
+        @it("collects all channels across shelves, without using video authors as subscriptions")
+        function _()
+            result = Innertube.ParseSubscriptionChannelsFeeds([
+                {
+                    items: [
+                        { type: "channel", authorId: "UC-a", author: "Channel A" }
+                        { type: "video", authorId: "UC-not-subscribed", videoId: "video" }
+                    ]
+                }
+                {
+                    items: [
+                        { type: "channel", authorId: "UC-b", author: "No recent uploads" }
+                        { type: "channel", authorId: "UC-a", author: "Channel A" }
+                        { type: "channel", author: "Missing ID" }
+                    ], continuation: "more-channels"
+                }
+            ])
+            m.assertEqual(result.items.Count(), 2)
+            m.assertEqual(result.items[0].authorId, "UC-a")
+            m.assertEqual(result.items[1].authorId, "UC-b")
+            m.assertEqual(result.continuation, "more-channels")
+        end function
+
+        @it("returns an empty list without inventing channels for a signed-in account with no subscriptions")
+        function _()
+            result = Innertube.ParseSubscriptionChannelsFeeds([])
+            m.assertEqual(result.items.Count(), 0)
+            m.assertEqual(result.continuation, "")
+        end function
+
+        @it("parses channel renderers and preserves the channel-list continuation")
+        function _()
+            feeds = Innertube.ParseResponseDataForFeeds([
+                {
+                    gridChannelRenderer: {
+                        channelId: "UC-channel"
+                        title: { simpleText: "Subscribed channel" }
+                        thumbnail: { thumbnails: [{ url: "https://example.com/channel.png" }] }
+                    }
+                }
+                {
+                    continuationItemRenderer: {
+                        continuationEndpoint: { continuationCommand: { token: "next-channels" } }
+                    }
+                }
+            ], { noContainers: true })
+            result = Innertube.ParseSubscriptionChannelsFeeds(feeds)
+            m.assertEqual(result.items[0].authorId, "UC-channel")
+            m.assertEqual(result.items[0].author, "Subscribed channel")
+            m.assertEqual(result.items[0].authorThumbnails[0].url, "https://example.com/channel.png")
+            m.assertEqual(result.continuation, "next-channels")
+        end function
+
+    end class
+
+end namespace
