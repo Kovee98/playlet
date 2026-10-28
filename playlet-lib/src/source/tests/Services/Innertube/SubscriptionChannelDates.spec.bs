@@ -159,6 +159,25 @@ namespace Tests
             m.assertFalse(channels[1].unseen)
         end function
 
+        @it("orders channels with last known upload dates before fresh dates arrive")
+        function _()
+            channels = [
+                { authorId: "UC-a" }
+                { authorId: "UC-b" }
+                { authorId: "UC-new" }
+                { authorId: "UC-fresh", latestUploadTimestamp: 50 }
+            ]
+            SubscriptionChannelsUtils.ApplyKnownUploadDates(channels, { "UC-a": 100, "UC-b": 300, "UC-fresh": 900 })
+            m.assertInvalid(channels[2].latestUploadTimestamp)
+            m.assertEqual(channels[3].latestUploadTimestamp, 50)
+
+            result = SubscriptionChannelsUtils.Sort(channels)
+            m.assertEqual(result[0].authorId, "UC-b")
+            m.assertEqual(result[1].authorId, "UC-a")
+            m.assertEqual(result[2].authorId, "UC-fresh")
+            m.assertEqual(result[3].authorId, "UC-new")
+        end function
+
     end class
 
 end namespace

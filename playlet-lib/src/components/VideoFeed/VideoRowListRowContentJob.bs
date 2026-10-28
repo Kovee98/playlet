@@ -108,6 +108,10 @@ function ExecuteJob() as void
             ' with the same items repeating.
             if feedSource.id = "inv_auth_playlists"
                 addedItemCount = DeduplicateAppendAuthPlaylists(feedContentNode, itemNodes)
+            else if feedSource.id = "inv_auth_feed" or feedSource.id = "subscription_channel"
+                ' Subscription feed pages can overlap (and are re-sorted by upload time),
+                ' so a video may show up again on a later page.
+                addedItemCount = DeduplicateAppendVideos(feedContentNode, itemNodes)
             else
                 feedContentNode.appendChildren(itemNodes)
                 addedItemCount = itemNodes.Count()
@@ -223,6 +227,32 @@ function DeduplicateAppendAuthPlaylists(feedContentNode as object, itemNodes as 
         return 0
     end if
     feedContentNode.appendChildren(nodesToAdd)
+    return nodesToAdd.Count()
+end function
+
+function DeduplicateAppendVideos(feedContentNode as object, itemNodes as object) as integer
+    existing = {}
+    for each child in feedContentNode.getChildren(-1, 0)
+        videoId = ValidString(child.videoId)
+        if videoId <> ""
+            existing[videoId] = true
+        end if
+    end for
+
+    nodesToAdd = []
+    for each itemNode in itemNodes
+        videoId = ValidString(itemNode.videoId)
+        if videoId <> ""
+            if existing.DoesExist(videoId)
+                continue for
+            end if
+            existing[videoId] = true
+        end if
+        nodesToAdd.Push(itemNode)
+    end for
+    if nodesToAdd.Count() > 0
+        feedContentNode.appendChildren(nodesToAdd)
+    end if
     return nodesToAdd.Count()
 end function
 

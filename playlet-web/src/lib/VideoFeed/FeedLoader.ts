@@ -106,11 +106,13 @@ async function runLoad(
       let hasContinuation = !!result.continuation;
       feedSource.state.continuation = result.continuation || "";
 
-      // See brightscript version for the "inv_auth_playlists" case
+      // See brightscript version for the "inv_auth_playlists" and subscription feed cases
       const items =
         feedSource.id === "inv_auth_playlists"
           ? deduplicateAuthPlaylists(state.videos, result.items)
-          : result.items || [];
+          : feedSource.id === "inv_auth_feed" || feedSource.id === "subscription_channel"
+            ? deduplicateVideos(state.videos, result.items)
+            : result.items || [];
 
       if (items.length > 0) {
         const paginationType = feedSource.state.paginationType;
@@ -182,6 +184,23 @@ function deduplicateAuthPlaylists(videos: any[], items: any[]) {
   return items.filter(
     (item) => !(item.playlistId && existingPlaylistIds.has(item.playlistId))
   );
+}
+
+export function deduplicateVideos(videos: any[], items: any[]) {
+  if (!items || items.length === 0) {
+    return [];
+  }
+  const seen = new Set(videos.map((video) => video.videoId).filter((id) => id));
+  return items.filter((item) => {
+    if (!item.videoId) {
+      return true;
+    }
+    if (seen.has(item.videoId)) {
+      return false;
+    }
+    seen.add(item.videoId);
+    return true;
+  });
 }
 
 // Keeps loaded feeds so switching back to one is instant. Entries expire after a while,

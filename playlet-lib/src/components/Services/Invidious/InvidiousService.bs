@@ -437,6 +437,10 @@ namespace Invidious
             if result = invalid or not IsArray(result.items)
                 return invalid
             end if
+            ' The Roku Subscriptions screen loads upload dates separately so the list shows sooner.
+            if context.feedSource.skipUploadDates = true
+                return result
+            end if
             result.uploadDatesIncomplete = SubscriptionChannelsUtils.AddUploadDates(result.items, context.cancellation)
             return result
         end function

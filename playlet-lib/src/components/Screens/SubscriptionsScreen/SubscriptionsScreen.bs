@@ -43,6 +43,7 @@ function Init()
     m.watchCounts = {}
     m.historyLoadedAt = invalid
     m.seenState = invalid
+    m.uploadDatesJob = invalid
 
     ' Background loads report here instead of the screen, so their failures stay silent.
     m.prefetchRowList = CreateObject("roSGNode", "Node")
@@ -139,6 +140,11 @@ function CancelChannelsLoad()
         JobSystem.UnobserveCallback(m.channelsJob)
         m.channelsJob = invalid
     end if
+    if m.uploadDatesJob <> invalid
+        m.uploadDatesJob.cancel = true
+        JobSystem.UnobserveCallback(m.uploadDatesJob)
+        m.uploadDatesJob = invalid
+    end if
 end function
 
 function CancelHistoryLoad()
@@ -160,7 +166,7 @@ function Refresh(_unused as dynamic) as void
         m.channelProfileId = profileId
         m.selectedChannelId = ""
         m.selectedChannelTitle = ""
-        m.channelUploads = {}
+        m.channelUploads = SubscriptionChannelsUtils.LoadUploadDatesCache(profileId)
         m.seenState = invalid
         ClearFeedCache()
         CancelHistoryLoad()
@@ -185,7 +191,7 @@ function Refresh(_unused as dynamic) as void
     m.channels.visible = true
     m.channelsStatus.text = Tr(Locale.Subscriptions.Loading)
     m.channelsJob = JobSystem.CreateCallback(OnChannelsLoaded)
-    JobSystem.QueueJob(m.jobQueue, Jobs.SubscriptionChannelsJob, { invidious: m.invidious, watchCounts: m.watchCounts }, m.channelsJob)
+    JobSystem.QueueJob(m.jobQueue, Jobs.SubscriptionChannelsJob, { invidious: m.invidious, watchCounts: m.watchCounts, knownUploads: m.channelUploads }, m.channelsJob)
     LoadWatchHistory()
 end function
 
@@ -290,11 +296,16 @@ function OnChannelsLoaded(event as object) as void
         item.id = channel.authorId
         item.title = ValidString(channel.author)
         item.HDPosterUrl = InvidiousContent.GetChannelThumbnail(channel.authorThumbnails)
+        ' -1 until the date is known (sorts last, never shows the unseen dot).
+        latest = -1
+        if IsNumber(channel.latestUploadTimestamp)
+            latest = channel.latestUploadTimestamp
+            m.channelUploads[channel.authorId] = latest
+        end if
         item.AddFields({
-            latestUploadTimestamp: ValidInt(channel.latestUploadTimestamp)
+            latestUploadTimestamp: latest
             unseen: ValidBool(channel.unseen)
         })
-        m.channelUploads[channel.authorId] = item.latestUploadTimestamp
         if item.title = ""
             item.title = channel.authorId
         end if
@@ -310,9 +321,7 @@ function OnChannelsLoaded(event as object) as void
         MarkChannelSeen(content.GetChild(selectedIndex))
     end if
     m.channelsStatus.text = ""
-    if info.data.uploadDatesIncomplete = true
-        m.channelsStatus.text = Tr(Locale.Subscriptions.UploadDatesIncomplete)
-    end if
+    LoadUploadDates()
     if selectedIndex = 0 and m.selectedChannelId <> ""
         m.selectedChannelId = ""
         m.selectedChannelTitle = ""
@@ -320,6 +329,65 @@ function OnChannelsLoaded(event as object) as void
     else
         SchedulePrefetch()
     end if
+end function
+
+' Fetches fresh upload dates after the channel list is shown, then updates the
+' unseen dots and the channel order.
+function LoadUploadDates() as void
+    content = m.channels.content
+    if content = invalid or content.GetChildCount() < 2
+        return
+    end if
+    authorIds = []
+    for index = 1 to content.GetChildCount() - 1
+        authorIds.Push(content.GetChild(index).id)
+    end for
+    m.uploadDatesJob = JobSystem.CreateCallback(OnUploadDatesLoaded)
+    JobSystem.QueueJob(m.jobQueue, Jobs.SubscriptionUploadDatesJob, { authorIds: authorIds }, m.uploadDatesJob)
+end function
+
+function OnUploadDatesLoaded(event as object) as void
+    if m.uploadDatesJob = invalid or event.GetNode() <> m.uploadDatesJob.id
+        return
+    end if
+    JobSystem.UnobserveCallback(event.GetRoSGNode())
+    m.uploadDatesJob = invalid
+    info = event.GetInfo()
+    if info.cancel or not info.success or not IsAssociativeArray(info.data)
+        if not info.cancel
+            LogWarn("Failed to load subscription upload dates:", info.error)
+        end if
+        return
+    end if
+    uploads = ValidAssociativeArray(info.data.uploads)
+    content = m.channels.content
+    if content = invalid
+        return
+    end if
+    items = content.GetChildren(-1, 0)
+    items.Shift()
+    channels = []
+    for each item in items
+        ' A failed lookup keeps the last known date.
+        if IsNumber(uploads[item.id])
+            item.latestUploadTimestamp = uploads[item.id]
+            m.channelUploads[item.id] = item.latestUploadTimestamp
+        end if
+        channels.Push({ authorId: item.id, latestUploadTimestamp: item.latestUploadTimestamp })
+    end for
+    m.seenState = SubscriptionChannelsUtils.UpdateUnseen(channels, m.seenState, TimeUtils.Now().AsSeconds())
+    SaveSeenState()
+    for index = 0 to items.Count() - 1
+        items[index].unseen = ValidBool(channels[index].unseen)
+    end for
+    if m.channels.IsInFocusChain()
+        MarkChannelSeen(content.GetChild(m.channels.itemFocused))
+    end if
+    SubscriptionChannelsUtils.SaveUploadDatesCache(m.channelProfileId, m.channelUploads)
+    if info.data.incomplete = true
+        m.channelsStatus.text = Tr(Locale.Subscriptions.UploadDatesIncomplete)
+    end if
+    ResortChannels()
 end function
 
 function LoadSeenState(profileId as string) as dynamic

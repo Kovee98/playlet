@@ -12,6 +12,7 @@ namespace Tests
             m.node.profilesService.AddField("currentProfile", "node", false)
             m.node.loadJob = invalid
             m.node.channelsJob = invalid
+            m.node.uploadDatesJob = invalid
             m.node.historyJob = invalid
             m.node.feed = invalid
             m.node.feedFailed = false
@@ -90,6 +91,17 @@ namespace Tests
 
             m.assertTrue(pendingJob.cancel)
             m.assertInvalid(m.node.channelsJob)
+        end function
+
+        @it("cancels a pending upload date lookup before refreshing")
+        function _()
+            pendingJob = CreateObject("roSGNode", "JobCallback")
+            m.node.uploadDatesJob = pendingJob
+
+            m.top@.Refresh(0)
+
+            m.assertTrue(pendingJob.cancel)
+            m.assertInvalid(m.node.uploadDatesJob)
         end function
 
         @it("clears old videos when signed out")

@@ -9,7 +9,6 @@ function ExecuteJob() as void
     seen = {}
     continuations = {}
     continuation = ""
-    uploadDatesIncomplete = false
     while true
         if JobIsCancelled()
             JobCancel()
@@ -18,6 +17,7 @@ function ExecuteJob() as void
         response = service.MakeRequest({
             id: "subscription_channels"
             endpoint: "auth_subscriptions"
+            skipUploadDates: true
             state: {}
         }, {
             additionalQueryParams: { continuation: continuation }
@@ -30,9 +30,6 @@ function ExecuteJob() as void
         if not IsArray(response.result.items)
             JobError("Invalid subscription channel list")
             return
-        end if
-        if response.result.uploadDatesIncomplete = true
-            uploadDatesIncomplete = true
         end if
         for each channel in response.result.items
             if not StringUtils.IsNullOrEmpty(channel.authorId) and not seen.DoesExist(channel.authorId)
@@ -54,10 +51,10 @@ function ExecuteJob() as void
         JobCancel()
         return
     end if
-    ' Watch counts from the last history load; fresh history is loaded by a separate job
-    ' so the channel list doesn't wait for it.
+    ' Upload dates and watch counts come from earlier loads; fresh ones are loaded by
+    ' separate jobs so the channel list doesn't wait for them.
+    SubscriptionChannelsUtils.ApplyKnownUploadDates(channels, input.knownUploads)
     JobSuccessData({
         channels: SubscriptionChannelsUtils.Sort(channels, input.watchCounts)
-        uploadDatesIncomplete: uploadDatesIncomplete
     })
 end function

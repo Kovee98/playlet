@@ -1,0 +1,24 @@
+import "pkg:/source/utils/SubscriptionChannelsUtils.bs"
+
+' Fetches each channel's latest upload date. Runs after the channel list is shown,
+' since it takes one request per channel.
+@job("SubscriptionUploadDatesJob")
+function ExecuteJob() as void
+    input = JobGetInput()
+    channels = []
+    for each authorId in ValidArray(input.authorIds)
+        channels.Push({ authorId: authorId })
+    end for
+    incomplete = SubscriptionChannelsUtils.AddUploadDates(channels, JobGetCancellation())
+    if JobIsCancelled()
+        JobCancel()
+        return
+    end if
+    uploads = {}
+    for each channel in channels
+        if IsNumber(channel.latestUploadTimestamp) and channel.latestUploadTimestamp >= 0
+            uploads[channel.authorId] = channel.latestUploadTimestamp
+        end if
+    end for
+    JobSuccessData({ uploads: uploads, incomplete: incomplete })
+end function

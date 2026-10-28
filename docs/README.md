@@ -250,10 +250,16 @@ watch often: each recently watched video from a channel (from the last few pages
 of YouTube watch history) counts like an upload six hours later, capped at two days,
 so upload recency stays the main signal. Channels without uploads appear at the bottom.
 Upload dates come from YouTube's public channel feeds and are cached for five
-minutes; the first load may take longer for accounts with many subscriptions.
-If a date cannot be checked, that channel appears last and a warning offers a retry.
+minutes. On Roku, the channel list appears right away using the last known upload
+dates (remembered per profile across restarts); fresh dates load in the background,
+then the dots update and the list re-sorts (unless you are browsing it at that moment).
+On the web, the first load may take longer for accounts with many subscriptions.
+If a date cannot be checked, that channel keeps its last known date (or appears last)
+and a warning offers a retry.
 Focus a channel with the Roku remote (or hover, focus, or click it on the web) to show that
-channel's uploads, newest first. **All** restores the combined subscription feed.
+channel's uploads, newest first. **All** restores the combined subscription feed, sorted
+by upload time (for YouTube accounts the time is estimated from "3 hours ago"-style text,
+English only); videos repeated across pages are shown once.
 Moving down the grid loads more videos; the web also offers **Load more**.
 
 A blue dot next to a channel marks uploads you have not seen yet; it clears when

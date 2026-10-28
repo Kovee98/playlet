@@ -3,16 +3,26 @@ import "pkg:/source/utils/ArrayUtils.bs"
 import "pkg:/source/utils/CancellationUtils.bs"
 import "pkg:/source/utils/Logging.bs"
 import "pkg:/source/utils/MathUtils.bs"
+import "pkg:/source/utils/StringUtils.bs"
 import "pkg:/source/utils/Types.bs"
 
 namespace SubscriptionChannelsUtils
 
+    ' Upload-date lookups run with this many requests in flight. Each finished request
+    ' immediately starts the next, so one slow feed doesn't hold up a whole batch.
+    const UPLOAD_DATE_CONCURRENCY = 8
+    ' Last known upload dates per profile, so the channel list can be ordered before
+    ' fresh dates are fetched (also after a restart).
+    const UPLOAD_DATES_CACHE_FILE = "cachefs:/subscription_upload_dates_v1.json"
+
     function AddUploadDates(channels as object, cancellation as dynamic) as boolean
         incomplete = false
-        for offset = 0 to channels.Count() - 1 step 4
-            pending = []
-            for index = offset to MathUtils.Min(offset + 3, channels.Count() - 1)
-                channel = channels[index]
+        pending = []
+        nextIndex = 0
+        while nextIndex < channels.Count() or pending.Count() > 0
+            while pending.Count() < UPLOAD_DATE_CONCURRENCY and nextIndex < channels.Count()
+                channel = channels[nextIndex]
+                nextIndex++
                 channel.latestUploadTimestamp = -1
                 if IsString(channel.authorId) and channel.authorId <> ""
                     request = HttpClient.Get("https://www.youtube.com/feeds/videos.xml")
@@ -22,32 +32,76 @@ namespace SubscriptionChannelsUtils
                     incomplete = true
                     LogWarn("Cannot check subscription upload date: missing channel ID")
                 end if
-            end for
-            for each item in pending
-                response = item.response.Await()
-                if CancellationUtils.IsCancelled(cancellation)
-                    for each active in pending
-                        active.response.Cancel()
-                    end for
-                    return false
-                end if
-                timestamp = invalid
+            end while
+            if pending.Count() = 0
+                continue while
+            end if
+            item = pending.Shift()
+            response = item.response.Await()
+            if CancellationUtils.IsCancelled(cancellation)
+                for each active in pending
+                    active.response.Cancel()
+                end for
+                return false
+            end if
+            timestamp = invalid
+            if response.IsSuccess()
+                timestamp = ParseLatestUpload(response.Text())
+            end if
+            if timestamp = invalid
+                incomplete = true
                 if response.IsSuccess()
-                    timestamp = ParseLatestUpload(response.Text())
-                end if
-                if timestamp = invalid
-                    incomplete = true
-                    if response.IsSuccess()
-                        LogWarn("Invalid channel upload feed:", item.channel.authorId)
-                    else
-                        LogWarn("Cannot check subscription upload date:", item.channel.authorId, response.ErrorMessage())
-                    end if
+                    LogWarn("Invalid channel upload feed:", item.channel.authorId)
                 else
-                    item.channel.latestUploadTimestamp = timestamp
+                    LogWarn("Cannot check subscription upload date:", item.channel.authorId, response.ErrorMessage())
                 end if
-            end for
-        end for
+            else
+                item.channel.latestUploadTimestamp = timestamp
+            end if
+        end while
         return incomplete
+    end function
+
+    ' Fills in latestUploadTimestamp from known dates (authorId -> timestamp), for channels
+    ' that don't have one yet.
+    function ApplyKnownUploadDates(channels as object, known as dynamic) as void
+        if not IsAssociativeArray(known)
+            return
+        end if
+        for each channel in channels
+            if not IsAssociativeArray(channel) or IsNumber(channel.latestUploadTimestamp) or not IsString(channel.authorId)
+                continue for
+            end if
+            timestamp = known[channel.authorId]
+            if IsNumber(timestamp)
+                channel.latestUploadTimestamp = timestamp
+            end if
+        end for
+    end function
+
+    function LoadUploadDatesCache(profileId as string) as object
+        if profileId = ""
+            return {}
+        end if
+        store = StringUtils.ParseJsonSafe(ValidString(ReadAsciiFile(UPLOAD_DATES_CACHE_FILE)))
+        if not IsAssociativeArray(store) or not IsAssociativeArray(store[profileId])
+            return {}
+        end if
+        return store[profileId]
+    end function
+
+    function SaveUploadDatesCache(profileId as string, uploads as object) as void
+        if profileId = ""
+            return
+        end if
+        store = StringUtils.ParseJsonSafe(ValidString(ReadAsciiFile(UPLOAD_DATES_CACHE_FILE)))
+        if not IsAssociativeArray(store)
+            store = {}
+        end if
+        store[profileId] = uploads
+        if not WriteAsciiFile(UPLOAD_DATES_CACHE_FILE, FormatJson(store))
+            LogWarn("Cannot save subscription upload dates cache")
+        end if
     end function
 
     function ParseLatestUpload(text as string) as dynamic
