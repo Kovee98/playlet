@@ -627,8 +627,21 @@ namespace Invidious
                 videos.Append(json.videos)
             end if
 
+            ' Invidious splits unseen uploads into "notifications"; merge them back in upload order.
+            dated = []
+            undated = []
+            for each video in videos
+                if IsAssociativeArray(video) and IsNumber(video.published)
+                    dated.Push(video)
+                else
+                    undated.Push(video)
+                end if
+            end for
+            dated.SortBy("published", "r")
+            dated.Append(undated)
+
             result = {
-                items: videos
+                items: dated
             }
 
             if json.continuation <> invalid
