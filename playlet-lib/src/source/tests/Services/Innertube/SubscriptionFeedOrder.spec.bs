@@ -1,0 +1,55 @@
+import "pkg:/components/Services/Invidious/InvidiousService.bs"
+
+namespace Tests
+
+    @suite
+    class SubscriptionFeedOrderTests extends Rooibos.BaseTestSuite
+
+        @describe("Subscription feed upload order")
+
+        @it("estimates timestamps from relative published text")
+        function _()
+            now = 1000000000
+            m.assertEqual(TimeUtils.EstimateTimestampFromRelativeText("3 hours ago", now), now - 3 * 3600)
+            m.assertEqual(TimeUtils.EstimateTimestampFromRelativeText("Streamed 2 days ago", now), now - 2 * 86400)
+            m.assertEqual(TimeUtils.EstimateTimestampFromRelativeText("1 week ago", now), now - 604800)
+            m.assertEqual(TimeUtils.EstimateTimestampFromRelativeText("5 mins ago", now), now - 300)
+            m.assertEqual(TimeUtils.EstimateTimestampFromRelativeText("1 month ago", now), now - 2592000)
+            m.assertInvalid(TimeUtils.EstimateTimestampFromRelativeText("Premieres in 3 hours", now))
+            m.assertInvalid(TimeUtils.EstimateTimestampFromRelativeText("", now))
+            m.assertInvalid(TimeUtils.EstimateTimestampFromRelativeText(invalid, now))
+        end function
+
+        @it("sorts Invidious notifications and videos by published time")
+        function _()
+            result = Invidious.SortFeedByUploadTime([
+                { videoId: "old", published: 100 }
+                { videoId: "new", published: 300 }
+                { videoId: "mid", published: 200 }
+            ], 1000)
+            m.assertEqual(result[0].videoId, "new")
+            m.assertEqual(result[1].videoId, "mid")
+            m.assertEqual(result[2].videoId, "old")
+        end function
+
+        @it("sorts YouTube feed videos by relative text, keeping ties and undated videos in order")
+        function _()
+            result = Invidious.SortFeedByUploadTime([
+                { videoId: "day-a", publishedText: "1 day ago" }
+                { videoId: "week", publishedText: "1 week ago" }
+                { videoId: "upcoming", publishedText: "" }
+                { videoId: "hour", publishedText: "2 hours ago" }
+                { videoId: "day-b", publishedText: "1 day ago" }
+                { videoId: "tile", lines: ["Some Channel", "12K views • 3 hours ago"] }
+                { videoId: "live", publishedText: "", liveNow: true }
+            ], 1000000000)
+            ids = []
+            for each video in result
+                ids.Push(video.videoId)
+            end for
+            m.assertEqual(ids.Join(","), "live,hour,tile,day-a,day-b,week,upcoming")
+        end function
+
+    end class
+
+end namespace

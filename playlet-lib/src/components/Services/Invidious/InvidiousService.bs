@@ -627,18 +627,7 @@ namespace Invidious
                 videos.Append(json.videos)
             end if
 
-            ' Invidious splits unseen uploads into "notifications"; merge them back in upload order.
-            dated = []
-            undated = []
-            for each video in videos
-                if IsAssociativeArray(video) and IsNumber(video.published)
-                    dated.Push(video)
-                else
-                    undated.Push(video)
-                end if
-            end for
-            dated.SortBy("published", "r")
-            dated.Append(undated)
+            dated = Invidious.SortFeedByUploadTime(videos, TimeUtils.Now().AsSeconds())
 
             result = {
                 items: dated
@@ -823,6 +812,43 @@ namespace Invidious
     ' innertube path gets: the built-in instance's responses carry it already.
     function NeedsLiveStreamInfo(metadata as object) as boolean
         return ValidBool(metadata.liveNow) and IsArray(metadata.adaptiveFormats) and StringUtils.IsNullOrEmpty(metadata.liveHeadUrl)
+    end function
+
+    ' Sorts subscription feed videos newest first. Invidious provides "published"; the
+    ' built-in YouTube backend only has relative text ("3 hours ago"), so it's estimated.
+    ' Videos with the same time keep their original order, and undated ones go last.
+    function SortFeedByUploadTime(videos as object, now as integer) as object
+        dated = []
+        undated = []
+        for each video in videos
+            timestamp = invalid
+            if IsAssociativeArray(video)
+                if IsNumber(video.published) and video.published > 0
+                    timestamp = video.published
+                else if ValidBool(video.liveNow)
+                    timestamp = now
+                else
+                    text = ValidString(video.publishedText)
+                    if text = "" and IsArray(video.lines)
+                        text = video.lines.Join(" • ")
+                    end if
+                    timestamp = TimeUtils.EstimateTimestampFromRelativeText(text, now)
+                end if
+            end if
+            if timestamp = invalid
+                undated.Push(video)
+            else
+                ' Ascending sort on the negated time keeps ties stable.
+                dated.Push({ sortKey: -timestamp, video: video })
+            end if
+        end for
+        dated.SortBy("sortKey")
+        result = []
+        for each entry in dated
+            result.Push(entry.video)
+        end for
+        result.Append(undated)
+        return result
     end function
 
 end namespace

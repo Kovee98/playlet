@@ -40,6 +40,35 @@ namespace TimeUtils
         return this
     end function
 
+    ' Estimates a Unix timestamp from English relative text such as "3 hours ago"
+    ' or "Streamed 2 days ago". Returns invalid when the text can't be parsed.
+    function EstimateTimestampFromRelativeText(text as dynamic, now as integer) as dynamic
+        if not IsString(text) or text = ""
+            return invalid
+        end if
+        regex = CreateObject("roRegex", "(\d+)\s*(second|sec|minute|min|hour|hr|day|week|wk|month|mo|year|yr)s?\.?\s+ago", "i")
+        match = regex.Match(text)
+        if match.Count() < 3
+            return invalid
+        end if
+        unit = LCase(match[2])
+        seconds = 1
+        if unit = "minute" or unit = "min"
+            seconds = 60
+        else if unit = "hour" or unit = "hr"
+            seconds = 3600
+        else if unit = "day"
+            seconds = 86400
+        else if unit = "week" or unit = "wk"
+            seconds = 604800
+        else if unit = "month" or unit = "mo"
+            seconds = 2592000
+        else if unit = "year" or unit = "yr"
+            seconds = 31536000
+        end if
+        return now - match[1].ToInt() * seconds
+    end function
+
     function RFC1123_Date(when as object) as string
         wd = when.getWeekday().left(3)
         dom = when.getDayOfMonth()
