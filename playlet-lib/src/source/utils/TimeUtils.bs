@@ -42,7 +42,7 @@ namespace TimeUtils
 
     ' Estimates a Unix timestamp from English relative text such as "3 hours ago"
     ' or "Streamed 2 days ago". Returns invalid when the text can't be parsed.
-    function EstimateTimestampFromRelativeText(text as dynamic, now as integer) as dynamic
+    function EstimateTimestampFromRelativeText(text as dynamic, referenceTime as integer) as dynamic
         if not IsString(text) or text = ""
             return invalid
         end if
@@ -66,7 +66,7 @@ namespace TimeUtils
         else if unit = "year" or unit = "yr"
             seconds = 31536000
         end if
-        return now - match[1].ToInt() * seconds
+        return referenceTime - match[1].ToInt() * seconds
     end function
 
     function RFC1123_Date(when as object) as string
