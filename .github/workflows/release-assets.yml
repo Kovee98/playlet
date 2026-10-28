@@ -1,0 +1,65 @@
+name: Release assets
+
+# Publishing a GitHub release builds Playlet and attaches the packages to it:
+#   - playlet-lib.zip: the component library the installed app downloads from the latest release
+#   - playlet-app.zip: the app shell, for sideloading on a Roku in developer mode
+# The packages are unsigned, so no Roku device or signing secrets are needed.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to rebuild and re-upload assets for (e.g. v0.49.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-upload:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stamp commit hash and version
+        run: |
+          npm run manifest-git-hash
+          # The app's update check reads the version from the latest release tag, so the
+          # packaged manifests should match it. Tags that are not vX.Y.Z keep package.json's version.
+          version="${TAG#v}"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            npm version "$version" --no-git-tag-version --allow-same-version
+            npm run version-sync
+          else
+            echo "::warning::Tag '$TAG' is not vX.Y.Z; using version $(node -p "require('./package.json').version")"
+          fi
+
+      - name: Build unsigned packages
+        run: npm run build:unsigned
+
+      - name: Upload release assets
+        run: |
+          ls -l release
+          gh release upload "$TAG" release/playlet-lib.zip release/playlet-app.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

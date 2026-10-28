@@ -31,6 +31,7 @@ This document contains various kinds of information related to Playlet developme
   - [Developer settings](#developer-settings)
     - [In case of a softlock](#in-case-of-a-softlock)
 - [CI/CD](#cicd)
+  - [Release assets (fork)](#release-assets-fork)
 
 ## Environment setup
 
@@ -191,6 +192,8 @@ in web Settings.
 
 Remote loading requires a public, non-prerelease GitHub release with
 `playlet-lib.zip` (and optionally the signed `playlet-lib.squashfs.pkg`) attached.
+Publishing a release attaches these automatically; see
+[Release assets (fork)](#release-assets-fork).
 Pushing source code alone does not publish these assets, and the existing Canary
 workflow creates a prerelease that GitHub's `/releases/latest` URL does not select.
 Development builds continue to use the local library server and embedded fallback,
@@ -241,8 +244,11 @@ which sections are enabled on Home. Videos use the existing playback, queue,
 channel, and bookmark actions. Unlike Home's horizontal rows, Subscriptions uses
 a three-column, vertically scrolling grid on Roku and a responsive video grid on
 the web. A second sidebar, between the main navigation and the video grid, lists
-**All** followed by the selected profile's subscribed channels with their logos,
-ordered by most recent upload. Channels without uploads appear at the bottom.
+**All** followed by the selected profile's subscribed channels with their logos.
+Channels are ordered by most recent upload, with a small boost for channels you
+watch often: each recently watched video from a channel (from the last few pages
+of YouTube watch history) counts like an upload six hours later, capped at two days,
+so upload recency stays the main signal. Channels without uploads appear at the bottom.
 Upload dates come from YouTube's public channel feeds and are cached for five
 minutes; the first load may take longer for accounts with many subscriptions.
 If a date cannot be checked, that channel appears last and a warning offers a retry.
@@ -250,10 +256,22 @@ Focus a channel with the Roku remote (or hover, focus, or click it on the web) t
 channel's uploads, newest first. **All** restores the combined subscription feed.
 Moving down the grid loads more videos; the web also offers **Load more**.
 
+A blue dot next to a channel marks uploads you have not seen yet; it clears when
+the channel is focused (or hovered on the web). Seen state is stored per profile and
+per device (Roku registry, browser local storage). The first time the tab loads,
+nothing is marked as new. Channel feeds are fetched without the account, so their
+red watch-progress bars come from the profile's recent watch history instead.
+
+To make switching channels instant, loaded channel feeds are cached for ten minutes
+(or until that channel uploads something newer), and the first page of the channels
+next to the selected one is preloaded in the background, including thumbnails.
+Scrolling further down a channel still loads more videos on demand.
+
 Sign in or activate a profile through Profiles first. YouTube sign-in must be
 completed on the Roku; Invidious profiles use their configured server. Use
-**Refresh** to fetch the channel list and current feed again after subscribing
-to a channel. Returning to the tab also reloads them. On Roku, Right moves from
+**Refresh** to clear the cache and fetch the channel list, watch history, and current
+feed again after subscribing to a channel. Returning to the tab also reloads the
+channel list. On Roku, Right moves from
 the channel list into the video grid; Left at the grid's first column returns
 to the channel list, and another Left returns to the main navigation.
 
@@ -261,7 +279,10 @@ To smoke-test, check the tab signed out, signed in, after switching profiles, an
 with an expired session. Verify the sidebar includes channels even when they have
 no recent uploads, logos have a fallback when unavailable, and channel order reflects
 the latest upload across the complete list. Focus two different channels, check newest-first
-ordering and pagination within each channel, then return to All. Verify playback/queue actions, refresh
+ordering and pagination within each channel, then return to All. Check that a channel with a
+new upload shows a dot that clears on focus, that partly watched videos show a progress bar
+in channel feeds, and that moving back to a neighboring channel shows its videos immediately.
+Verify playback/queue actions, refresh
 after a subscription change, and disable Subscriptions in Home's layout to confirm
 the dedicated tab remains available.
 
@@ -366,3 +387,20 @@ When merged to main branch, a Github action will build Playlet, run static analy
 Existing `canary` release will be removed before creating a new one.
 
 This makes [Releasing](./RELEASING.md) simpler.
+
+### Release assets (fork)
+
+Publishing a GitHub release in this fork runs the **Release assets** workflow
+(`.github/workflows/release-assets.yml`). It checks out the release tag, stamps the
+commit hash and the tag's version (for `vX.Y.Z` tags) into the manifests, runs
+`npm run build:unsigned`, and attaches `playlet-lib.zip` and `playlet-app.zip` to the
+release. No Roku device or signing secrets are needed, so no `.squashfs.pkg` files are
+produced; the app falls back to `playlet-lib.zip` automatically.
+
+To release: push your commits, then create a release with a new tag such as `v0.49.0`.
+Don't mark it as a pre-release: `/releases/latest` (used by the app) skips pre-releases.
+Assets appear a few minutes later, and Playlet picks up the new library the next time it starts.
+Sideload `playlet-app.zip` only when the app shell itself changed. To rebuild the assets
+of an existing release, run the workflow manually from the Actions tab with its tag.
+
+`npm run build:unsigned` can also be run locally; the packages land in `release/`.

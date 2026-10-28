@@ -9,6 +9,7 @@ namespace RegistryUtils
     const PLAYLET_LIB_URLS = "playlet_lib_urls"
     const BOOKMARKS = "bookmarks"
     const MESSAGES = "messages"
+    const SUBSCRIPTION_SEEN = "subscription_seen"
 
     const INNERTUBE_SESSION_DATA = "innertube_session_data"
     const INNERTUBE_POTOKENS = "innertube_potokens"

@@ -10,25 +10,29 @@
   import ChannelCell from "./ChannelCell.svelte";
   import { ProfileAuthState } from "lib/Types";
   import { onDestroy } from "svelte";
+  import {
+    FeedLoadState,
+    createFeedState,
+    getOrCreateFeedState,
+    loadFeedPage,
+    type FeedState,
+  } from "./FeedLoader";
 
   // TODO:P1 figure out why some uncached feeds (e.g. channels/ucid/videos) get hit twice
   export let feed: any = undefined;
   export let showStatus = false;
   export let emptyMessage = "No subscription videos yet. Subscribe to channels to see their videos here.";
   export let layout: "row" | "grid" = "row";
+  // When set, loaded pages are kept in a shared cache and restored instantly next time.
+  export let cacheKey = "";
+  export let latestUploadTimestamp: number | undefined = undefined;
+  // videoId -> percent watched, overriding the progress the feed itself reports.
+  export let watchProgress: Record<string, number> | undefined = undefined;
   let loadError = false;
   let videos = [];
 
-  enum FeedLoadState {
-    None,
-    Loading,
-    Loaded,
-    LoadedPage,
-    Error,
-  }
-
   let feedLoadState = FeedLoadState.None;
-  let feedSourcesIndex = 0;
+  let feedState: FeedState;
 
   let itemWidths = [];
 
@@ -38,12 +42,7 @@
   let scrollStart = 0;
   let scrollEnd = 0;
 
-  let loadDataTask = undefined;
   let disposed = false;
-
-  // w-80|w-60 p-2: 320px|240px + 16px padding on each side
-  const videoItemWidth = 320 + 16 * 2;
-  const channelItemWidth = 240 + 16 * 2;
 
   const intersectionObserver = new IntersectionObserver(
     function (entries) {
@@ -57,15 +56,37 @@
 
   $: {
     if (feed) {
-      feedSourcesIndex = 0;
-      feedLoadState = FeedLoadState.None;
-      loadError = false;
-      videos = [];
-      itemWidths = [];
+      feedState = cacheKey
+        ? getOrCreateFeedState(cacheKey, feed, latestUploadTimestamp)
+        : createFeedState(feed);
       scrollStart = 0;
       scrollEnd = 0;
-      loadDataTask = undefined;
+      syncFromFeedState();
+      if (feedState.task) {
+        // A prefetch for this feed is already running: show its results instead of
+        // starting a duplicate request.
+        awaitPendingLoad(feedState);
+      }
     }
+  }
+
+  function syncFromFeedState() {
+    if (disposed || !feedState) {
+      return;
+    }
+    feedLoadState = feedState.feedLoadState;
+    loadError = feedState.loadError;
+    videos = feedState.videos;
+    itemWidths = feedState.itemWidths;
+  }
+
+  async function awaitPendingLoad(state: FeedState) {
+    await state.task;
+    if (state !== feedState) {
+      return;
+    }
+    syncFromFeedState();
+    loadRow();
   }
 
   $: {
@@ -144,151 +165,27 @@
       return;
     }
 
-    if (loadDataTask) {
+    if (!feedState || feedState.task) {
       return;
     }
 
-    try {
-      loadDataTask = loadData();
-      await loadDataTask;
-    } catch (error) {
-      console.error(error);
-      loadError = true;
-      feedLoadState = FeedLoadState.Error;
-    }
-    loadDataTask = undefined;
-  }
-
-  async function loadData() {
+    const state = feedState;
+    // Cached feeds keep loading after this row goes away so the cache still gets the page.
+    const isCancelled = () => !cacheKey && (disposed || state !== feedState);
     feedLoadState = FeedLoadState.Loading;
-    let totalFetchedItems = 0;
-
-    while (true) {
-      const feedSources = feed.feedSources;
-      if (disposed) {
-        return;
-      }
-      if (feedSourcesIndex >= feedSources.length) {
-        break;
-      }
-
-      const feedSource = feedSources[feedSourcesIndex];
-      feedSource.state = feedSource.state || {};
-      if (
-        feedSource.state.loadState === FeedLoadState.Loaded ||
-        feedSource.state.loadState === FeedLoadState.Error
-      ) {
-        feedSourcesIndex++;
-        continue;
-      }
-
-      invidiousApi.markFeedSourcePagination(feedSource);
-      let hadContinuation = !!feedSource.state.continuation;
-
-      try {
-        const result = await invidiousApi.makeRequest(feedSource);
-        if (disposed) {
-          return;
+    await loadFeedPage(
+      state,
+      invidiousApi,
+      () => {
+        if (state === feedState) {
+          syncFromFeedState();
         }
-        if (!result) {
-          loadError = true;
-          feedSource.state.loadState = FeedLoadState.Error;
-          feedSourcesIndex++;
-          if (feedSourcesIndex >= feedSources.length) {
-            feedLoadState = FeedLoadState.Loaded;
-          }
-          continue;
-        }
-
-        let hasContinuation = !!result.continuation;
-        feedSource.state.continuation = result.continuation || "";
-
-        // See brightscript version for the "inv_auth_playlists" case
-        const items =
-          feedSource.id === "inv_auth_playlists"
-            ? deduplicateAuthPlaylists(result.items)
-            : result.items || [];
-
-        if (items.length > 0) {
-          const paginationType = feedSource.state.paginationType;
-          if (result.isLastPage || (hadContinuation && !hasContinuation)) {
-            feedSource.state.loadState = FeedLoadState.Loaded;
-          } else if (paginationType === "Continuation" && hasContinuation) {
-            feedSource.state.loadState = FeedLoadState.LoadedPage;
-          } else if (paginationType === "Pages") {
-            feedSource.state.loadState = FeedLoadState.LoadedPage;
-          } else {
-            feedSource.state.loadState = FeedLoadState.Loaded;
-          }
-        } else {
-          feedSource.state.loadState = FeedLoadState.Loaded;
-        }
-
-        if (
-          feedSource.state.loadState === FeedLoadState.Loaded &&
-          feedSourcesIndex >= feedSources.length - 1
-        ) {
-          feedLoadState = FeedLoadState.Loaded;
-        } else {
-          feedLoadState = FeedLoadState.LoadedPage;
-        }
-
-        const newVideos = items;
-
-        newVideos.forEach((item) => {
-          if (item.playlistId) {
-            item.type = "playlist";
-          } else if (item.videoId) {
-            item.type = "video";
-          }
-        });
-
-        const newItemWidths = newVideos.map((video) => {
-          if (video.type === "channel") {
-            return channelItemWidth;
-          } else {
-            return videoItemWidth;
-          }
-        });
-
-        itemWidths = [...itemWidths, ...newItemWidths];
-        videos = [...(videos || []), ...newVideos];
-
-        totalFetchedItems += items.length;
-        if (totalFetchedItems >= 6) {
-          break;
-        }
-      } catch (error) {
-        // TODO:P0 handle case of unauthenticated calls
-        // TODO:P0 handle case of popular feed disabled
-        // If we're done loading all the feed, but still have no videos, hide the whole component.
-        console.error(error);
-        loadError = true;
-        feedSource.state.loadState = FeedLoadState.Error;
-      }
-    }
-  }
-
-  function deduplicateAuthPlaylists(items) {
-    if (!items || items.length === 0) {
-      return [];
-    }
-
-    if (videos.length === 0) {
-      return items;
-    }
-
-    const existingPlaylistIds = new Set(
-      videos.map((video) => video.playlistId).filter((id) => id)
+      },
+      isCancelled
     );
-
-    const newItems = items.filter((item) => {
-      if (item.playlistId && existingPlaylistIds.has(item.playlistId)) {
-        return false;
-      }
-      return true;
-    });
-    return newItems;
+    if (state === feedState) {
+      syncFromFeedState();
+    }
   }
 
   function recalculateVisibileCells() {
@@ -347,7 +244,11 @@
   {#if layout === "grid"}
     <div class="subscription-grid">
       {#each videos as video}
-        <VideoCell {...video} fullWidth />
+        <VideoCell
+          {...video}
+          percentDurationWatched={watchProgress?.[video.videoId] ?? video.percentDurationWatched}
+          fullWidth
+        />
       {/each}
     </div>
     <div bind:this={carouselElement} class="flex justify-center p-4">
@@ -368,7 +269,10 @@
       >
         {#if i >= scrollStart && i <= scrollEnd}
           {#if video.type === "video"}
-            <VideoCell {...video} />
+            <VideoCell
+              {...video}
+              percentDurationWatched={watchProgress?.[video.videoId] ?? video.percentDurationWatched}
+            />
           {:else if video.type === "playlist"}
             <PlaylistCell {...video} />
           {:else if video.type === "channel"}

@@ -2,16 +2,30 @@ import "pkg:/source/utils/Types.bs"
 
 function Init()
     m.logo = m.top.FindNode("logo")
+    m.unseenDot = m.top.FindNode("unseenDot")
     m.logo.ObserveField("loadStatus", FuncName(OnLogoStatus))
 end function
 
 function OnContentSet() as void
+    if m.content <> invalid
+        m.content.UnobserveFieldScoped("unseen")
+    end if
     content = m.top.itemContent
+    m.content = content
     if content = invalid
+        m.unseenDot.visible = false
         return
     end if
     m.top.FindNode("title").text = content.title
     m.logo.uri = content.HDPosterUrl
+    if content.HasField("unseen")
+        content.ObserveFieldScoped("unseen", FuncName(OnUnseenChange))
+    end if
+    OnUnseenChange()
+end function
+
+function OnUnseenChange()
+    m.unseenDot.visible = m.content <> invalid and ValidBool(m.content.unseen)
 end function
 
 function OnLogoStatus() as void

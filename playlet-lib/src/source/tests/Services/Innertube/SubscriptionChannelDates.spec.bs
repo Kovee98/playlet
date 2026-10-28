@@ -64,6 +64,101 @@ namespace Tests
             m.assertEqual(SubscriptionChannelsUtils.Sort([]).Count(), 0)
         end function
 
+        @it("gives often-watched channels a capped boost without lifting channels with no or failed dates")
+        function _()
+            day = 86400
+            result = SubscriptionChannelsUtils.Sort([
+                { authorId: "UC-new", latestUploadTimestamp: 10 * day }
+                { authorId: "UC-watched", latestUploadTimestamp: 9 * day }
+                { authorId: "UC-binged", latestUploadTimestamp: 7 * day + 1 }
+                { authorId: "UC-idle", latestUploadTimestamp: 0 }
+                { authorId: "UC-failed", latestUploadTimestamp: -1 }
+            ], { "UC-watched": 8, "UC-binged": 100, "UC-idle": 50, "UC-failed": 50 })
+            m.assertEqual(result[0].authorId, "UC-watched")
+            m.assertEqual(result[1].authorId, "UC-new")
+            m.assertEqual(result[2].authorId, "UC-binged")
+            m.assertEqual(result[3].authorId, "UC-idle")
+            m.assertEqual(result[4].authorId, "UC-failed")
+        end function
+
+        @it("summarizes watch history into progress and per-channel counts")
+        function _()
+            result = SubscriptionChannelsUtils.SummarizeWatchHistory([
+                { videoId: "v1", authorId: "UC-a", percentDurationWatched: 40 }
+                { videoId: "v2", authorId: "UC-a", percentDurationWatched: 0 }
+                { videoId: "v1", authorId: "UC-a", percentDurationWatched: 90 }
+                { videoId: "v3", authorId: "UC-b" }
+                { videoId: "", authorId: "UC-b" }
+                "invalid"
+            ])
+            m.assertEqual(result.progress.v1, 40)
+            m.assertFalse(result.progress.DoesExist("v2"))
+            m.assertEqual(result.counts["UC-a"], 3)
+            m.assertEqual(result.counts["UC-b"], 1)
+            m.assertEqual(SubscriptionChannelsUtils.SummarizeWatchHistory(invalid).progress.Count(), 0)
+        end function
+
+        @describe("Feed cache")
+
+        @it("reuses cached feeds until they expire or the channel uploads again")
+        function _()
+            m.assertTrue(SubscriptionChannelsUtils.IsFeedCacheFresh(1000, 900, 1500, 600))
+            m.assertTrue(SubscriptionChannelsUtils.IsFeedCacheFresh(1000, invalid, 1600, 600))
+            m.assertFalse(SubscriptionChannelsUtils.IsFeedCacheFresh(1000, 900, 1601, 600))
+            m.assertFalse(SubscriptionChannelsUtils.IsFeedCacheFresh(1000, 1001, 1100, 600))
+        end function
+
+        @describe("Unseen uploads")
+
+        @it("does not mark existing uploads as new on first use")
+        function _()
+            channels = [
+                { authorId: "UC-a", latestUploadTimestamp: 900 }
+                { authorId: "UC-b", latestUploadTimestamp: 0 }
+            ]
+            state = SubscriptionChannelsUtils.UpdateUnseen(channels, invalid, 1000)
+            m.assertFalse(channels[0].unseen)
+            m.assertFalse(channels[1].unseen)
+            m.assertEqual(state.since, 1000)
+        end function
+
+        @it("marks newer uploads until the channel is seen, then keeps state compact")
+        function _()
+            channels = [
+                { authorId: "UC-a", latestUploadTimestamp: 1100 }
+                { authorId: "UC-b", latestUploadTimestamp: 1200 }
+                { authorId: "UC-c", latestUploadTimestamp: 500 }
+                { authorId: "UC-failed", latestUploadTimestamp: -1 }
+            ]
+            state = SubscriptionChannelsUtils.UpdateUnseen(channels, { since: 1000, seen: {} }, 2000)
+            m.assertTrue(channels[0].unseen)
+            m.assertTrue(channels[1].unseen)
+            m.assertFalse(channels[2].unseen)
+            m.assertFalse(channels[3].unseen)
+            m.assertEqual(state.since, 1099)
+
+            m.assertTrue(SubscriptionChannelsUtils.MarkSeen(state, "UC-b", 1200))
+            m.assertFalse(SubscriptionChannelsUtils.MarkSeen(state, "UC-b", 1200))
+            m.assertFalse(SubscriptionChannelsUtils.MarkSeen(state, "UC-c", 500))
+
+            state = SubscriptionChannelsUtils.UpdateUnseen(channels, state, 2000)
+            m.assertTrue(channels[0].unseen)
+            m.assertFalse(channels[1].unseen)
+            m.assertEqual(state.seen["UC-b"], 1200)
+
+            m.assertTrue(SubscriptionChannelsUtils.MarkSeen(state, "UC-a", 1100))
+            state = SubscriptionChannelsUtils.UpdateUnseen(channels, state, 2000)
+            m.assertFalse(channels[0].unseen)
+            m.assertFalse(channels[1].unseen)
+            m.assertEqual(state.since, 1200)
+            m.assertEqual(state.seen.Count(), 0)
+
+            channels[0].latestUploadTimestamp = 1300
+            SubscriptionChannelsUtils.UpdateUnseen(channels, state, 3000)
+            m.assertTrue(channels[0].unseen)
+            m.assertFalse(channels[1].unseen)
+        end function
+
     end class
 
 end namespace

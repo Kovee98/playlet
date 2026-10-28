@@ -3,6 +3,7 @@ import "pkg:/source/utils/ArrayUtils.bs"
 import "pkg:/source/utils/CancellationUtils.bs"
 import "pkg:/source/utils/Logging.bs"
 import "pkg:/source/utils/MathUtils.bs"
+import "pkg:/source/utils/Types.bs"
 
 namespace SubscriptionChannelsUtils
 
@@ -95,24 +96,131 @@ namespace SubscriptionChannelsUtils
         return latest
     end function
 
-    function Sort(channels as object) as object
+    ' Each recently watched video from a channel moves it up as if it had uploaded
+    ' 6 hours later, capped at 2 days, so upload recency stays the main signal.
+    const WATCH_BOOST_SECONDS = 21600
+    const MAX_WATCH_BOOST_COUNT = 8
+
+    function SortScore(channel as object, watchCounts as dynamic) as dynamic
+        latest = channel.latestUploadTimestamp
+        if not IsNumber(latest)
+            return -1
+        end if
+        if latest <= 0 or not IsAssociativeArray(watchCounts) or not IsString(channel.authorId)
+            return latest
+        end if
+        count = watchCounts[channel.authorId]
+        if not IsInt(count) or count <= 0
+            return latest
+        end if
+        return latest + MathUtils.Min(count, MAX_WATCH_BOOST_COUNT) * WATCH_BOOST_SECONDS
+    end function
+
+    function Sort(channels as object, watchCounts = invalid as dynamic) as object
         ' Insert across the complete list, not separately sorted continuation pages.
         sorted = []
+        scores = []
         for each channel in channels
+            score = SortScore(channel, watchCounts)
             index = 0
             while index < sorted.Count()
-                previous = sorted[index]
-                if channel.latestUploadTimestamp > previous.latestUploadTimestamp
+                if score > scores[index]
                     exit while
                 end if
-                if channel.latestUploadTimestamp = previous.latestUploadTimestamp and channel.authorId < previous.authorId
+                if score = scores[index] and channel.authorId < sorted[index].authorId
                     exit while
                 end if
                 index++
             end while
             ArrayUtils.Insert(sorted, channel, index)
+            ArrayUtils.Insert(scores, score, index)
         end for
         return sorted
+    end function
+
+    ' A cached feed is reused until it expires or the channel uploads something newer.
+    function IsFeedCacheFresh(savedAt as integer, latestUploadTimestamp as dynamic, now as integer, maxAgeSeconds as integer) as boolean
+        if now - savedAt > maxAgeSeconds
+            return false
+        end if
+        return not (IsNumber(latestUploadTimestamp) and latestUploadTimestamp > savedAt)
+    end function
+
+    ' Collects resume progress (videoId -> percent) and watch counts (authorId -> count)
+    ' from watch history items.
+    function SummarizeWatchHistory(items as object) as object
+        progress = {}
+        counts = {}
+        if not IsArray(items)
+            return { progress: progress, counts: counts }
+        end if
+        for each item in items
+            if not IsAssociativeArray(item) or not IsString(item.videoId) or item.videoId = ""
+                continue for
+            end if
+            percent = item.percentDurationWatched
+            if IsNumber(percent) and percent > 0 and not progress.DoesExist(item.videoId)
+                progress[item.videoId] = percent
+            end if
+            if IsString(item.authorId) and item.authorId <> ""
+                counts[item.authorId] = ValidInt(counts[item.authorId]) + 1
+            end if
+        end for
+        return { progress: progress, counts: counts }
+    end function
+
+    ' Marks channels with uploads newer than what the user has seen. Returns a compacted state
+    ' { since, seen } to persist: "since" is a watermark below which nothing is new, and "seen"
+    ' only keeps channels that would otherwise look new.
+    function UpdateUnseen(channels as object, state as dynamic, now as integer) as object
+        if not IsAssociativeArray(state) or not IsNumber(state.since) or not IsAssociativeArray(state.seen)
+            ' First run: start from now so existing uploads are not all marked as new.
+            state = { since: now, seen: {} }
+        end if
+        since = state.since
+        oldestUnseen = invalid
+        newestUpload = since
+        for each channel in channels
+            latest = channel.latestUploadTimestamp
+            seen = state.seen[ValidString(channel.authorId)]
+            if not IsNumber(seen)
+                seen = 0
+            end if
+            channel.unseen = IsNumber(latest) and latest > since and latest > seen
+            if channel.unseen and (oldestUnseen = invalid or latest < oldestUnseen)
+                oldestUnseen = latest
+            end if
+            if IsNumber(latest) and latest > newestUpload
+                newestUpload = latest
+            end if
+        end for
+        newSince = newestUpload
+        if oldestUnseen <> invalid
+            newSince = oldestUnseen - 1
+        end if
+        if newSince < since
+            newSince = since
+        end if
+        newSeen = {}
+        for each authorId in state.seen
+            seen = state.seen[authorId]
+            if IsNumber(seen) and seen > newSince
+                newSeen[authorId] = seen
+            end if
+        end for
+        return { since: newSince, seen: newSeen }
+    end function
+
+    function MarkSeen(state as object, authorId as string, latestUploadTimestamp as dynamic) as boolean
+        if not IsAssociativeArray(state) or not IsAssociativeArray(state.seen) or not IsNumber(latestUploadTimestamp)
+            return false
+        end if
+        seen = state.seen[authorId]
+        if latestUploadTimestamp <= state.since or (IsNumber(seen) and latestUploadTimestamp <= seen)
+            return false
+        end if
+        state.seen[authorId] = latestUploadTimestamp
+        return true
     end function
 
 end namespace

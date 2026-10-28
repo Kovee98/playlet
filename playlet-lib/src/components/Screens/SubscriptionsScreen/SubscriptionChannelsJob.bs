@@ -54,8 +54,47 @@ function ExecuteJob() as void
         JobCancel()
         return
     end if
+    history = SubscriptionChannelsUtils.SummarizeWatchHistory(LoadWatchHistory(service))
+    if JobIsCancelled()
+        JobCancel()
+        return
+    end if
     JobSuccessData({
-        channels: SubscriptionChannelsUtils.Sort(channels)
+        channels: SubscriptionChannelsUtils.Sort(channels, history.counts)
         uploadDatesIncomplete: uploadDatesIncomplete
+        watchProgress: history.progress
     })
+end function
+
+' Recent watch history gives resume progress for channel feeds (which YouTube returns
+' without account data) and a watch-frequency signal for channel ordering. It's optional.
+function LoadWatchHistory(service as object) as object
+    items = []
+    continuation = ""
+    for page = 1 to 3
+        queryParams = {}
+        if continuation <> ""
+            queryParams.continuation = continuation
+        end if
+        response = service.MakeRequest({
+            id: "subscription_watch_history"
+            endpoint: "watch_history"
+            state: {}
+        }, {
+            additionalQueryParams: queryParams
+            cancellation: JobGetCancellation()
+        })
+        if not response.success or not IsAssociativeArray(response.result) or not IsArray(response.result.items)
+            if not response.success and response.cancelled <> true
+                LogWarn("Cannot load watch history for subscriptions:", response.error)
+            end if
+            exit for
+        end if
+        items.Append(response.result.items)
+        continuation = ValidString(response.result.continuation)
+        if continuation = "" or JobIsCancelled()
+            exit for
+        end if
+    end for
+    return items
 end function

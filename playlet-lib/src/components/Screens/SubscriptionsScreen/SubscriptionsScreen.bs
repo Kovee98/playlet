@@ -10,8 +10,21 @@ import "pkg:/components/VideoFeed/FeedLoadState.bs"
 import "pkg:/source/utils/FocusManagement.bs"
 import "pkg:/source/utils/Locale.bs"
 import "pkg:/source/utils/Logging.bs"
+import "pkg:/source/utils/MathUtils.bs"
+import "pkg:/source/utils/RegistryUtils.bs"
 import "pkg:/source/utils/RemoteKeys.bs"
+import "pkg:/source/utils/StringUtils.bs"
+import "pkg:/source/utils/SubscriptionChannelsUtils.bs"
+import "pkg:/source/utils/TimeUtils.bs"
 import "pkg:/source/utils/Types.bs"
+
+' Loaded channel feeds are reused for instant switching, and are dropped after this
+' long or when the channel has a newer upload than the cached copy.
+const FEED_CACHE_SECONDS = 600
+' Number of channels above and below the selected one whose first page is preloaded.
+const PREFETCH_DISTANCE = 2
+const PREFETCH_THUMBNAILS_PER_FEED = 6
+const PREFETCH_POSTER_COUNT = 24
 
 function Init()
     m.grid = m.top.FindNode("grid")
@@ -22,6 +35,24 @@ function Init()
     m.feedTitle = m.top.FindNode("feedTitle")
     m.selectedChannelId = ""
     m.selectedChannelTitle = ""
+    m.feedCache = {}
+    m.channelUploads = {}
+    m.watchProgress = {}
+    m.seenState = invalid
+
+    ' Background loads report here instead of the screen, so their failures stay silent.
+    m.prefetchRowList = CreateObject("roSGNode", "Node")
+    m.prefetchRowList.AddFields({ someContentReady: false, onError: "", dispose: true })
+
+    ' Hidden posters warm the texture cache for preloaded feeds' first thumbnails.
+    m.thumbnailPrefetch = m.top.FindNode("thumbnailPrefetch")
+    m.nextPrefetchPoster = 0
+    for index = 1 to PREFETCH_POSTER_COUNT
+        poster = m.thumbnailPrefetch.CreateChild("Poster")
+        poster.width = 350
+        poster.height = 196
+        poster.loadDisplayMode = "scaleToZoom"
+    end for
 end function
 
 function OnNodeReady()
@@ -44,6 +75,7 @@ function OnVisibleChange()
         Refresh(invalid)
     else
         CancelLoad()
+        CancelPrefetch()
         CancelChannelsLoad()
     end if
 end function
@@ -51,11 +83,24 @@ end function
 function OnProfileChanged()
     m.selectedChannelId = ""
     m.selectedChannelTitle = ""
+    ClearFeedCache()
     Refresh(invalid)
 end function
 
 function OnRefreshSelected()
+    ForceRefresh(invalid)
+end function
+
+function ForceRefresh(_unused as dynamic)
+    ClearFeedCache()
     Refresh(invalid)
+end function
+
+function ClearFeedCache()
+    CancelLoad()
+    CancelPrefetch()
+    m.feedCache = {}
+    m.watchProgress = {}
 end function
 
 function CancelLoad()
@@ -63,6 +108,23 @@ function CancelLoad()
         m.loadJob.cancel = true
         JobSystem.UnobserveCallback(m.loadJob)
         m.loadJob = invalid
+        DropFeed(m.loadKey)
+    end if
+end function
+
+function CancelPrefetch()
+    if m.prefetchJob <> invalid
+        m.prefetchJob.cancel = true
+        JobSystem.UnobserveCallback(m.prefetchJob)
+        m.prefetchJob = invalid
+        DropFeed(m.prefetchKey)
+    end if
+end function
+
+' A cancelled load may leave pagination half-updated, so it is reloaded from scratch.
+function DropFeed(key as dynamic)
+    if IsString(key)
+        m.feedCache.Delete(key)
     end if
 end function
 
@@ -85,6 +147,9 @@ function Refresh(_unused as dynamic) as void
         m.channelProfileId = profileId
         m.selectedChannelId = ""
         m.selectedChannelTitle = ""
+        m.channelUploads = {}
+        m.seenState = invalid
+        ClearFeedCache()
         m.settingChannels = true
         content = CreateObject("roSGNode", "ContentNode")
         allItem = content.CreateChild("ContentNode")
@@ -123,15 +188,24 @@ function OnChannelsLoaded(event as object) as void
     end if
     m.settingChannels = true
     selectedIndex = 0
+    channels = info.data.channels
+    m.seenState = SubscriptionChannelsUtils.UpdateUnseen(channels, LoadSeenState(m.channelProfileId), TimeUtils.Now().AsSeconds())
+    SaveSeenState()
+    m.channelUploads = {}
     content = CreateObject("roSGNode", "ContentNode")
     allItem = content.CreateChild("ContentNode")
     allItem.title = Tr(Locale.Subscriptions.All)
     allItem.HDPosterUrl = "pkg:/images/icons/subscriptions.png"
-    for each channel in info.data.channels
+    for each channel in channels
         item = content.CreateChild("ContentNode")
         item.id = channel.authorId
         item.title = ValidString(channel.author)
         item.HDPosterUrl = InvidiousContent.GetChannelThumbnail(channel.authorThumbnails)
+        item.AddFields({
+            latestUploadTimestamp: ValidInt(channel.latestUploadTimestamp)
+            unseen: ValidBool(channel.unseen)
+        })
+        m.channelUploads[channel.authorId] = item.latestUploadTimestamp
         if item.title = ""
             item.title = channel.authorId
         end if
@@ -143,6 +217,11 @@ function OnChannelsLoaded(event as object) as void
     m.channels.content = content
     m.channels.jumpToItem = selectedIndex
     m.settingChannels = false
+    if m.channels.IsInFocusChain()
+        MarkChannelSeen(content.GetChild(selectedIndex))
+    end if
+    m.watchProgress = ValidAssociativeArray(info.data.watchProgress)
+    ApplyWatchProgressToGrid()
     m.channelsStatus.text = ""
     if info.data.uploadDatesIncomplete = true
         m.channelsStatus.text = Tr(Locale.Subscriptions.UploadDatesIncomplete)
@@ -151,6 +230,41 @@ function OnChannelsLoaded(event as object) as void
         m.selectedChannelId = ""
         m.selectedChannelTitle = ""
         RefreshFeed()
+    else
+        SchedulePrefetch()
+    end if
+end function
+
+function LoadSeenState(profileId as string) as dynamic
+    if profileId = ""
+        return invalid
+    end if
+    store = StringUtils.ParseJsonSafe(ValidString(RegistryUtils.Read(RegistryUtils.SUBSCRIPTION_SEEN)))
+    if not IsAssociativeArray(store)
+        return invalid
+    end if
+    return store[profileId]
+end function
+
+function SaveSeenState() as void
+    if m.channelProfileId = "" or m.seenState = invalid
+        return
+    end if
+    store = StringUtils.ParseJsonSafe(ValidString(RegistryUtils.Read(RegistryUtils.SUBSCRIPTION_SEEN)))
+    if not IsAssociativeArray(store)
+        store = {}
+    end if
+    store[m.channelProfileId] = m.seenState
+    RegistryUtils.Write(RegistryUtils.SUBSCRIPTION_SEEN, FormatJson(store))
+end function
+
+function MarkChannelSeen(item as dynamic) as void
+    if item = invalid or not ValidBool(item.unseen)
+        return
+    end if
+    item.unseen = false
+    if SubscriptionChannelsUtils.MarkSeen(m.seenState, item.id, item.latestUploadTimestamp)
+        SaveSeenState()
     end if
 end function
 
@@ -159,6 +273,7 @@ function OnChannelFocused() as void
         return
     end if
     item = m.channels.content.GetChild(m.channels.itemFocused)
+    MarkChannelSeen(item)
     if item <> invalid and item.id <> m.selectedChannelId
         m.selectedChannelId = item.id
         m.selectedChannelTitle = item.title
@@ -198,10 +313,46 @@ function RefreshFeed() as void
         return
     end if
 
-    m.feed = CreateObject("roSGNode", "FeedContentNode")
-    m.feed.title = Tr(Locale.Feed.Subscriptions)
-    m.feed.loadState = FeedLoadState.None
-    m.feed.feedSourcesIndex = 0
+    m.feedTitle.text = Tr(Locale.Subscriptions.All)
+    if m.selectedChannelId <> ""
+        m.feedTitle.text = m.selectedChannelTitle
+    end if
+    key = FeedKey(m.selectedChannelId)
+    if m.prefetchJob <> invalid and m.prefetchKey = key
+        ' The channel is already preloading, so show it as soon as that finishes.
+        m.loadJob = m.prefetchJob
+        m.loadKey = key
+        m.prefetchJob = invalid
+        m.feed = m.feedCache[key].feed
+    else
+        m.feed = GetCachedFeed(m.selectedChannelId)
+        if m.feed = invalid
+            m.feed = CreateFeed(m.selectedChannelId, m.selectedChannelTitle)
+            m.feedCache[key] = { feed: m.feed, savedAt: TimeUtils.Now().AsSeconds() }
+        end if
+    end if
+    AppendGridItems()
+    if m.feed.GetChildCount() = 0
+        LoadNextPage()
+    end if
+    if m.loadJob = invalid
+        UpdateFeedStatus()
+        SchedulePrefetch()
+    end if
+    if m.grid.IsInFocusChain()
+        NodeSetFocus(m.refreshButton, true)
+    end if
+end function
+
+function FeedKey(channelId as string) as string
+    return "channel:" + channelId
+end function
+
+function CreateFeed(channelId as string, channelTitle as string) as object
+    feed = CreateObject("roSGNode", "FeedContentNode")
+    feed.title = Tr(Locale.Feed.Subscriptions)
+    feed.loadState = FeedLoadState.None
+    feed.feedSourcesIndex = 0
     source = {
         id: "inv_auth_feed"
         title: Tr(Locale.Feed.Subscriptions)
@@ -209,19 +360,38 @@ function RefreshFeed() as void
         endpoint: "auth_feed"
         state: { loadState: FeedLoadState.None }
     }
-    m.feedTitle.text = Tr(Locale.Subscriptions.All)
-    if m.selectedChannelId <> ""
+    if channelId <> ""
         source.id = "subscription_channel"
+        source.title = channelTitle
         source.endpoint = "channel_videos"
-        source.pathParams = { ucid: m.selectedChannelId }
+        source.pathParams = { ucid: channelId }
         source.queryParams = { sort_by: "newest" }
-        m.feedTitle.text = m.selectedChannelTitle
     end if
-    m.feed.feedSources = [source]
-    LoadNextPage()
-    if m.grid.IsInFocusChain()
-        NodeSetFocus(m.refreshButton, true)
+    feed.feedSources = [source]
+    return feed
+end function
+
+function GetCachedFeed(channelId as string) as dynamic
+    key = FeedKey(channelId)
+    entry = m.feedCache[key]
+    if entry = invalid
+        return invalid
     end if
+    isFresh = SubscriptionChannelsUtils.IsFeedCacheFresh(entry.savedAt, m.channelUploads[channelId], TimeUtils.Now().AsSeconds(), FEED_CACHE_SECONDS)
+    if not isFresh or FeedHasError(entry.feed)
+        m.feedCache.Delete(key)
+        return invalid
+    end if
+    return entry.feed
+end function
+
+function FeedHasError(feed as object) as boolean
+    for each source in feed.feedSources
+        if IsAssociativeArray(source.state) and source.state.loadState = FeedLoadState.Error
+            return true
+        end if
+    end for
+    return false
 end function
 
 function LoadNextPage() as void
@@ -232,7 +402,8 @@ function LoadNextPage() as void
         return
     end if
     m.feed.loadState = FeedLoadState.Loading
-    m.loadJob = JobSystem.CreateCallback(OnPageLoaded)
+    m.loadKey = FeedKey(m.selectedChannelId)
+    m.loadJob = JobSystem.CreateCallback(OnFeedJobDone)
     JobSystem.QueueJob(m.jobQueue, Jobs.VideoRowListRowContentJob, {
         rowList: m.top
         feedContentNode: m.feed
@@ -240,31 +411,138 @@ function LoadNextPage() as void
     }, m.loadJob)
 end function
 
-function OnPageLoaded(event as object) as void
-    if m.loadJob = invalid or event.GetNode() <> m.loadJob.id
+' Preloads the first page of nearby channels, one at a time, once the visible feed is idle.
+function SchedulePrefetch() as void
+    if m.prefetchJob <> invalid or m.loadJob <> invalid or not m.top.visible or m.channels.content = invalid
+        return
+    end if
+    content = m.channels.content
+    focused = m.channels.itemFocused
+    for distance = 1 to PREFETCH_DISTANCE
+        for each direction in [1, -1]
+            item = content.GetChild(focused + direction * distance)
+            if item = invalid or GetCachedFeed(item.id) <> invalid
+                continue for
+            end if
+            feed = CreateFeed(item.id, item.title)
+            feed.loadState = FeedLoadState.Loading
+            m.prefetchKey = FeedKey(item.id)
+            m.feedCache[m.prefetchKey] = { feed: feed, savedAt: TimeUtils.Now().AsSeconds() }
+            m.prefetchJob = JobSystem.CreateCallback(OnFeedJobDone)
+            JobSystem.QueueJob(m.jobQueue, Jobs.VideoRowListRowContentJob, {
+                rowList: m.prefetchRowList
+                feedContentNode: feed
+                invidious: m.invidious
+            }, m.prefetchJob)
+            return
+        end for
+    end for
+end function
+
+function OnFeedJobDone(event as object) as void
+    node = event.GetNode()
+    isCurrent = m.loadJob <> invalid and node = m.loadJob.id
+    isPrefetch = m.prefetchJob <> invalid and node = m.prefetchJob.id
+    if not isCurrent and not isPrefetch
         return
     end if
     JobSystem.UnobserveCallback(event.GetRoSGNode())
-    m.loadJob = invalid
+    if isCurrent
+        key = m.loadKey
+        m.loadJob = invalid
+    else
+        key = m.prefetchKey
+        m.prefetchJob = invalid
+    end if
+    entry = m.feedCache[key]
     if event.GetInfo().cancel
+        DropFeed(key)
         return
     end if
+    ' A job can also finish without loading anything (e.g. a removed feed).
+    if entry <> invalid and (FeedHasError(entry.feed) or entry.feed.loadState = FeedLoadState.Loading)
+        DropFeed(key)
+        if isCurrent
+            m.feedFailed = true
+        end if
+    end if
 
+    if isCurrent
+        AppendGridItems()
+        UpdateFeedStatus()
+    else if entry <> invalid
+        PrefetchThumbnails(entry.feed)
+    end if
+    SchedulePrefetch()
+end function
+
+function AppendGridItems()
     content = m.grid.content
     for index = content.GetChildCount() to m.feed.GetChildCount() - 1
-        content.AppendChild(m.feed.GetChild(index).Clone(false))
+        content.AppendChild(CloneWithProgress(m.feed.GetChild(index)))
     end for
-    hasVideos = content.GetChildCount() > 0
+end function
+
+function UpdateFeedStatus()
+    hasVideos = m.grid.content.GetChildCount() > 0
     m.grid.visible = hasVideos
     m.grid.focusable = hasVideos
     m.status.visible = not hasVideos or m.feedFailed
-    if not m.feedFailed and not hasVideos
-        if m.selectedChannelId = ""
+    if m.feedFailed
+        m.status.text = Tr(Locale.Dialogs.FailedToLoadFeed)
+    else if not hasVideos
+        if m.loadJob <> invalid
+            m.status.text = Tr(Locale.Subscriptions.Loading)
+        else if m.selectedChannelId = ""
             m.status.text = Tr(Locale.Subscriptions.Empty)
         else
             m.status.text = Tr(Locale.Subscriptions.ChannelEmpty)
         end if
     end if
+end function
+
+' Grid items are clones, so watch progress can be updated without touching cached feeds.
+function CloneWithProgress(item as object) as object
+    clone = item.Clone(false)
+    percent = WatchProgressFor(clone)
+    if percent <> invalid
+        clone.percentDurationWatched = percent
+    end if
+    return clone
+end function
+
+function WatchProgressFor(item as object) as dynamic
+    if not item.HasField("percentDurationWatched")
+        return invalid
+    end if
+    return m.watchProgress[ValidString(item.videoId)]
+end function
+
+function ApplyWatchProgressToGrid() as void
+    content = m.grid.content
+    if content = invalid
+        return
+    end if
+    for index = 0 to content.GetChildCount() - 1
+        item = content.GetChild(index)
+        percent = WatchProgressFor(item)
+        if percent <> invalid and item.percentDurationWatched <> percent
+            ' Replacing the node makes the visible cell redraw its progress bar.
+            content.ReplaceChild(CloneWithProgress(item), index)
+        end if
+    end for
+end function
+
+function PrefetchThumbnails(feed as object)
+    posters = m.thumbnailPrefetch.GetChildren(-1, 0)
+    count = MathUtils.Min(feed.GetChildCount(), PREFETCH_THUMBNAILS_PER_FEED)
+    for index = 0 to count - 1
+        thumbnail = ValidString(feed.GetChild(index).thumbnail)
+        if thumbnail <> ""
+            posters[m.nextPrefetchPoster].uri = thumbnail
+            m.nextPrefetchPoster = (m.nextPrefetchPoster + 1) mod posters.Count()
+        end if
+    end for
 end function
 
 function OnFeedError()
@@ -352,6 +630,6 @@ function GetContextMenuOptionsForItem(item as object) as object
     if not StringUtils.IsNullOrEmpty(item.authorId)
         options.Push(ContextMenuUtils.CreateOption(Tr(Locale.ContextMenu.OpenChannel), m.top, "OpenVideoChannel", [item]))
     end if
-    options.Push(ContextMenuUtils.CreateOption(Tr(Locale.Buttons.Refresh), m.top, "Refresh", [invalid]))
+    options.Push(ContextMenuUtils.CreateOption(Tr(Locale.Buttons.Refresh), m.top, "ForceRefresh", [invalid]))
     return options
 end function

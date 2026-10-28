@@ -10,6 +10,7 @@
         <field id="someContentReady" type="boolean" alwaysNotify="true" />
         <field id="onError" type="string" alwaysNotify="true" />
         <function name="Refresh" />
+        <function name="ForceRefresh" />
         <function name="PlayVideo" />
         <function name="QueueVideo" />
         <function name="OpenVideoChannel" />
@@ -43,5 +44,6 @@
             vertFocusAnimationStyle="fixedFocus"
             focusBitmapUri="pkg:/images/focus-glow-padding-30.$$RES$$.9.png"
         />
+        <Group id="thumbnailPrefetch" translation="[0,2000]" opacity="0" />
     </children>
 </component>

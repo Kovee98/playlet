@@ -4,8 +4,9 @@
     </interface>
     <children>
         <Poster id="logo" width="36" height="36" translation="[6,6]" loadDisplayMode="scaleToFit" />
-        <Label id="title" width="187" height="48" translation="[52,0]" vertAlign="center">
+        <Label id="title" width="167" height="48" translation="[52,0]" vertAlign="center">
             <Font role="font" uri="font:SystemFontFile" size="20" />
         </Label>
+        <Poster id="unseenDot" uri="pkg:/images/white-circle-xs.png" width="10" height="10" translation="[226,19]" blendColor="0x3EA6FFFF" visible="false" />
     </children>
 </component>

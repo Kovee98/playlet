@@ -1,11 +1,33 @@
 <script lang="ts">
   import VideoListRow from "lib/VideoFeed/VideoListRow.svelte";
-  import { playletStateStore, translate } from "lib/Stores";
+  import { invidiousVideoApiStore, playletStateStore, translate } from "lib/Stores";
   import { ProfileAuthState } from "lib/Types";
   import { PlayletApi } from "lib/Api/PlayletApi";
+  import { InvidiousApi } from "lib/Api/InvidiousApi";
   import { onDestroy } from "svelte";
+  import {
+    FeedLoadState,
+    clearFeedCache,
+    getCachedFeedState,
+    getOrCreateFeedState,
+    loadFeedPage,
+  } from "lib/VideoFeed/FeedLoader";
+  import { getVideoThumbnailUrl } from "lib/VideoFeed/ThumbnailUrl";
+  import {
+    loadSeenState,
+    markSeen,
+    saveSeenState,
+    sortChannels,
+    summarizeWatchHistory,
+    updateUnseen,
+    type SeenState,
+  } from "./SubscriptionUtils";
   import UserIcon from "../../assets/user.svg.svelte";
   import SubscriptionsIcon from "../../assets/subscriptions-icon.svg.svelte";
+
+  const WATCH_HISTORY_PAGES = 3;
+  const PREFETCH_DISTANCE = 2;
+  const PREFETCH_THUMBNAILS_PER_FEED = 6;
 
   export let visibility: boolean;
   let revision = 0;
@@ -14,18 +36,45 @@
     author: string;
     thumbnailUrl: string;
     latestUploadTimestamp: number;
+    unseen?: boolean;
   };
   let channels: SubscriptionChannel[] = [];
   let selectedChannelId = "";
   let channelsLoading = false;
   let channelsError = false;
   let uploadDatesIncomplete = false;
+  let watchProgress: Record<string, number> = {};
+  let seenState: SeenState | undefined;
+  let seenProfileId = "";
   let requestId = 0;
+  let prefetchId = 0;
   let lastContext = "";
   let disposed = false;
+
+  const prefetchApi = new InvidiousApi();
+  const unsubscribeState = playletStateStore.subscribe((value) => {
+    prefetchApi.setInstance(value?.invidious?.instance);
+    let userCountryCode = value?.device?.user_country_code;
+    if (!userCountryCode || userCountryCode === "OT") {
+      userCountryCode = "US";
+    }
+    prefetchApi.userCountryCode = userCountryCode;
+    const currentProfile = (value?.profiles?.profiles ?? []).find(
+      (p) => p.id === value?.profiles?.currentProfile
+    );
+    prefetchApi.isLoggedIn =
+      !!currentProfile && currentProfile.authState !== ProfileAuthState.NeedsReauth;
+  });
+  const unsubscribeEndpoints = invidiousVideoApiStore.subscribe((value) => {
+    prefetchApi.endpoints = value;
+  });
+
   onDestroy(() => {
     disposed = true;
     requestId++;
+    prefetchId++;
+    unsubscribeState();
+    unsubscribeEndpoints();
   });
 
   $: profile = ($playletStateStore.profiles?.profiles ?? []).find(
@@ -39,18 +88,22 @@
     lastContext = context;
     selectedChannelId = "";
     channels = [];
-    loadChannels(context);
+    watchProgress = {};
+    clearFeedCache();
+    loadChannels(context, profile?.id ?? "");
   }
   $: feedKey = `${context}:${selectedChannelId}:${revision}`;
   $: selectedChannel = channels.find((channel) => channel.authorId === selectedChannelId);
 
-  async function loadChannels(context: string) {
+  async function loadChannels(context: string, profileId: string) {
     const currentRequest = ++requestId;
+    prefetchId++;
     if (!context) channels = [];
     channelsError = false;
     uploadDatesIncomplete = false;
     channelsLoading = !!context;
     if (!context) return;
+    const historyRequest = loadWatchHistory();
     const items = new Map<string, SubscriptionChannel>();
     const continuations = new Set<string>();
     let continuation = "";
@@ -84,14 +137,25 @@
         }
         continuations.add(continuation);
       } while (continuation);
-      channels = [...items.values()].sort((a, b) =>
-        b.latestUploadTimestamp - a.latestUploadTimestamp ||
-        (a.authorId < b.authorId ? -1 : a.authorId > b.authorId ? 1 : 0)
-      );
+      const history = await historyRequest;
+      if (disposed || currentRequest !== requestId) return;
+      const loaded = sortChannels([...items.values()], history.counts);
+      if (seenProfileId !== profileId) {
+        seenProfileId = profileId;
+        seenState = loadSeenState(profileId);
+      }
+      seenState = updateUnseen(loaded, seenState, Math.floor(Date.now() / 1000));
+      channels = loaded;
+      watchProgress = history.progress;
       uploadDatesIncomplete = incomplete;
       if (selectedChannelId && !items.has(selectedChannelId)) {
         selectedChannelId = "";
       }
+      if (selectedChannelId) {
+        markChannelSeen(selectedChannelId);
+      }
+      saveSeenState(profileId, seenState);
+      schedulePrefetch();
     } catch (error) {
       if (disposed || currentRequest !== requestId) return;
       console.error("Failed to load subscription channels", error);
@@ -99,6 +163,29 @@
     } finally {
       if (!disposed && currentRequest === requestId) channelsLoading = false;
     }
+  }
+
+  // Watch history supplies resume progress for channel feeds (which are fetched without the
+  // account) and how often each channel is watched. It is optional, so failures are ignored.
+  async function loadWatchHistory() {
+    const items = [];
+    let continuation = "";
+    try {
+      for (let page = 0; page < WATCH_HISTORY_PAGES; page++) {
+        const result = await PlayletApi.invidiousAuthenticatedRequest({
+          id: "subscription_watch_history",
+          endpoint: "watch_history",
+          state: { queryParams: continuation ? { continuation } : {} },
+        });
+        if (!Array.isArray(result?.items)) break;
+        items.push(...result.items);
+        if (!result.continuation || result.continuation === continuation) break;
+        continuation = result.continuation;
+      }
+    } catch (error) {
+      console.warn("Failed to load watch history for subscriptions", error);
+    }
+    return summarizeWatchHistory(items);
   }
 
   function channelThumbnail(thumbnails?: { url: string }[]) {
@@ -109,15 +196,68 @@
     return url;
   }
 
+  function markChannelSeen(id: string) {
+    const channel = channels.find((channel) => channel.authorId === id);
+    if (!channel?.unseen) return;
+    channel.unseen = false;
+    channels = channels;
+    if (markSeen(seenState, id, channel.latestUploadTimestamp) && seenProfileId) {
+      saveSeenState(seenProfileId, seenState);
+    }
+  }
+
   function selectChannel(id: string) {
+    markChannelSeen(id);
     if (selectedChannelId === id) return;
     selectedChannelId = id;
     window.scrollTo({ top: 0, behavior: "instant" });
+    schedulePrefetch();
   }
 
   function refresh() {
+    clearFeedCache();
     revision++;
-    loadChannels(context);
+    loadChannels(context, profile?.id ?? "");
+  }
+
+  function feedCacheKey(channelId: string) {
+    return `${context}:${revision}:${channelId}`;
+  }
+
+  // Loads the first page of the channels around the selected one, one at a time, so moving
+  // to a neighbor shows its videos and thumbnails without waiting.
+  async function schedulePrefetch() {
+    const currentPrefetch = ++prefetchId;
+    const ids = ["", ...channels.map((channel) => channel.authorId)];
+    const index = Math.max(0, ids.indexOf(selectedChannelId));
+    const neighbors = [];
+    for (let distance = 1; distance <= PREFETCH_DISTANCE; distance++) {
+      if (index + distance < ids.length) neighbors.push(ids[index + distance]);
+      if (index - distance >= 0) neighbors.push(ids[index - distance]);
+    }
+    // Let the visible feed go first.
+    await getCachedFeedState(feedCacheKey(selectedChannelId))?.task;
+    for (const id of neighbors) {
+      if (disposed || currentPrefetch !== prefetchId || !prefetchApi.canMakeRequest()) return;
+      const channel = channels.find((channel) => channel.authorId === id);
+      const state = getOrCreateFeedState(
+        feedCacheKey(id),
+        createFeed(id, channel?.author),
+        channel?.latestUploadTimestamp
+      );
+      if (state.feedLoadState === FeedLoadState.None || state.task) {
+        await loadFeedPage(state, prefetchApi);
+        preloadThumbnails(state.videos);
+      }
+    }
+  }
+
+  function preloadThumbnails(videos: any[]) {
+    const instance = $playletStateStore.invidious?.instance;
+    for (const video of videos.slice(0, PREFETCH_THUMBNAILS_PER_FEED)) {
+      const url = getVideoThumbnailUrl(video.videoId, video.videoThumbnails, instance);
+      if (url) new Image().src = url;
+    }
   }
 
   function createFeed(channelId: string, channelTitle: string) {
@@ -196,6 +336,9 @@
                 {/if}
               </span>
               <span class="channel-name">{channel.author}</span>
+              {#if channel.unseen}
+                <span class="unseen-dot" role="img" aria-label={$translate("New videos")}></span>
+              {/if}
             </button>
           {/each}
           {#if channelsLoading}
@@ -212,6 +355,9 @@
           {#key feedKey}
             <VideoListRow
               feed={createFeed(selectedChannelId, selectedChannel?.author)}
+              cacheKey={feedCacheKey(selectedChannelId)}
+              latestUploadTimestamp={selectedChannel?.latestUploadTimestamp}
+              {watchProgress}
               showStatus
               layout="grid"
               emptyMessage={selectedChannelId
@@ -269,7 +415,15 @@
     object-fit: cover;
   }
   .channel-name {
+    flex: 1 1 auto;
     min-width: 0;
+  }
+  .unseen-dot {
+    flex: 0 0 auto;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: #3ea6ff;
   }
   .channel-button:hover,
   .channel-button:focus-visible,
