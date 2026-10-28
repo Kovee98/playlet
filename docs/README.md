@@ -261,6 +261,9 @@ the channel is focused (or hovered on the web). Seen state is stored per profile
 per device (Roku registry, browser local storage). The first time the tab loads,
 nothing is marked as new. Channel feeds are fetched without the account, so their
 red watch-progress bars come from the profile's recent watch history instead.
+Watch history loads alongside the channel list, so it never delays it. The list first
+uses the previous watch counts, then re-sorts when fresh history arrives (unless you
+are browsing the list at that moment). History is reloaded at most every ten minutes.
 
 To make switching channels instant, loaded channel feeds are cached for ten minutes
 (or until that channel uploads something newer), and the first page of the channels

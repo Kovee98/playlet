@@ -26,6 +26,8 @@
   import SubscriptionsIcon from "../../assets/subscriptions-icon.svg.svelte";
 
   const WATCH_HISTORY_PAGES = 3;
+  // Watch history (progress bars and watch counts) is reloaded at most this often.
+  const WATCH_HISTORY_CACHE_MS = 600_000;
   const PREFETCH_DISTANCE = 2;
   const PREFETCH_THUMBNAILS_PER_FEED = 6;
 
@@ -44,6 +46,13 @@
   let channelsError = false;
   let uploadDatesIncomplete = false;
   let watchProgress: Record<string, number> = {};
+  let watchCounts: Record<string, number> = {};
+  let historyKey = "";
+  let historyLoadedAt = 0;
+  let historyLoading = false;
+  let historyRequestId = 0;
+  let navHovered = false;
+  let navFocused = false;
   let seenState: SeenState | undefined;
   let seenProfileId = "";
   let requestId = 0;
@@ -73,6 +82,7 @@
     disposed = true;
     requestId++;
     prefetchId++;
+    historyRequestId++;
     unsubscribeState();
     unsubscribeEndpoints();
   });
@@ -88,14 +98,13 @@
     lastContext = context;
     selectedChannelId = "";
     channels = [];
-    watchProgress = {};
     clearFeedCache();
     loadChannels(context, profile?.id ?? "");
   }
   $: feedKey = `${context}:${selectedChannelId}:${revision}`;
   $: selectedChannel = channels.find((channel) => channel.authorId === selectedChannelId);
 
-  async function loadChannels(context: string, profileId: string) {
+  async function loadChannels(context: string, profileId: string, forceHistory = false) {
     const currentRequest = ++requestId;
     prefetchId++;
     if (!context) channels = [];
@@ -103,7 +112,7 @@
     uploadDatesIncomplete = false;
     channelsLoading = !!context;
     if (!context) return;
-    const historyRequest = loadWatchHistory();
+    ensureWatchHistory(context, forceHistory);
     const items = new Map<string, SubscriptionChannel>();
     const continuations = new Set<string>();
     let continuation = "";
@@ -137,16 +146,14 @@
         }
         continuations.add(continuation);
       } while (continuation);
-      const history = await historyRequest;
-      if (disposed || currentRequest !== requestId) return;
-      const loaded = sortChannels([...items.values()], history.counts);
+      // Uses the last known watch counts; fresh history re-sorts the list when it arrives.
+      const loaded = sortChannels([...items.values()], watchCounts);
       if (seenProfileId !== profileId) {
         seenProfileId = profileId;
         seenState = loadSeenState(profileId);
       }
       seenState = updateUnseen(loaded, seenState, Math.floor(Date.now() / 1000));
       channels = loaded;
-      watchProgress = history.progress;
       uploadDatesIncomplete = incomplete;
       if (selectedChannelId && !items.has(selectedChannelId)) {
         selectedChannelId = "";
@@ -163,6 +170,41 @@
     } finally {
       if (!disposed && currentRequest === requestId) channelsLoading = false;
     }
+  }
+
+  // Loads watch history alongside the channel list, so the list never waits for it.
+  function ensureWatchHistory(key: string, force: boolean) {
+    if (key !== historyKey) {
+      historyKey = key;
+      historyRequestId++;
+      historyLoading = false;
+      historyLoadedAt = 0;
+      watchCounts = {};
+      watchProgress = {};
+    }
+    if (!force && (historyLoading || Date.now() - historyLoadedAt < WATCH_HISTORY_CACHE_MS)) {
+      return;
+    }
+    const currentRequest = ++historyRequestId;
+    historyLoading = true;
+    loadWatchHistory().then((history) => {
+      if (disposed || currentRequest !== historyRequestId) return;
+      historyLoading = false;
+      historyLoadedAt = Date.now();
+      watchProgress = history.progress;
+      watchCounts = history.counts;
+      resortChannels();
+    });
+  }
+
+  // Applies new watch counts to the channel order, unless the user is browsing the
+  // channel list (then the new order is used on the next load).
+  function resortChannels() {
+    if (navHovered || navFocused || channels.length < 2) return;
+    const sorted = sortChannels(channels, watchCounts);
+    if (sorted.every((channel, index) => channel === channels[index])) return;
+    channels = sorted;
+    schedulePrefetch();
   }
 
   // Watch history supplies resume progress for channel feeds (which are fetched without the
@@ -217,7 +259,7 @@
   function refresh() {
     clearFeedCache();
     revision++;
-    loadChannels(context, profile?.id ?? "");
+    loadChannels(context, profile?.id ?? "", true);
   }
 
   function feedCacheKey(channelId: string) {
@@ -301,7 +343,14 @@
       </p>
     {:else}
       <div class="subscriptions-layout">
-        <nav aria-label={$translate("Subscriptions")} class="channel-nav">
+        <nav
+          aria-label={$translate("Subscriptions")}
+          class="channel-nav"
+          on:mouseenter={() => navHovered = true}
+          on:mouseleave={() => navHovered = false}
+          on:focusin={() => navFocused = true}
+          on:focusout={() => navFocused = false}
+        >
           <button
             class="channel-button"
             class:selected={selectedChannelId === ""}

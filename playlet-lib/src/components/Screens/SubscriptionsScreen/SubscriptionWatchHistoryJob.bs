@@ -1,0 +1,49 @@
+import "pkg:/components/Services/Invidious/InvidiousService.bs"
+import "pkg:/source/utils/SubscriptionChannelsUtils.bs"
+
+' Recent watch history gives resume progress for channel feeds (which YouTube returns
+' without account data) and a watch-frequency signal for channel ordering. It's optional.
+const WATCH_HISTORY_PAGES = 3
+
+@job("SubscriptionWatchHistoryJob")
+function ExecuteJob() as void
+    input = JobGetInput()
+    service = new Invidious.InvidiousService(input.invidious)
+    items = []
+    continuation = ""
+    for page = 1 to WATCH_HISTORY_PAGES
+        if JobIsCancelled()
+            JobCancel()
+            return
+        end if
+        queryParams = {}
+        if continuation <> ""
+            queryParams.continuation = continuation
+        end if
+        response = service.MakeRequest({
+            id: "subscription_watch_history"
+            endpoint: "watch_history"
+            state: {}
+        }, {
+            additionalQueryParams: queryParams
+            cancellation: JobGetCancellation()
+        })
+        if not response.success or not IsAssociativeArray(response.result) or not IsArray(response.result.items)
+            if not response.success and response.cancelled <> true
+                LogWarn("Cannot load watch history for subscriptions:", response.error)
+            end if
+            exit for
+        end if
+        items.Append(response.result.items)
+        nextContinuation = ValidString(response.result.continuation)
+        if nextContinuation = "" or nextContinuation = continuation
+            exit for
+        end if
+        continuation = nextContinuation
+    end for
+    if JobIsCancelled()
+        JobCancel()
+        return
+    end if
+    JobSuccessData(SubscriptionChannelsUtils.SummarizeWatchHistory(items))
+end function

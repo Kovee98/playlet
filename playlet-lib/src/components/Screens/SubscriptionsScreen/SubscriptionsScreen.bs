@@ -25,6 +25,8 @@ const FEED_CACHE_SECONDS = 600
 const PREFETCH_DISTANCE = 2
 const PREFETCH_THUMBNAILS_PER_FEED = 6
 const PREFETCH_POSTER_COUNT = 24
+' Watch history (progress bars and watch counts) is reloaded at most this often.
+const WATCH_HISTORY_CACHE_SECONDS = 600
 
 function Init()
     m.grid = m.top.FindNode("grid")
@@ -38,6 +40,8 @@ function Init()
     m.feedCache = {}
     m.channelUploads = {}
     m.watchProgress = {}
+    m.watchCounts = {}
+    m.historyLoadedAt = invalid
     m.seenState = invalid
 
     ' Background loads report here instead of the screen, so their failures stay silent.
@@ -77,6 +81,7 @@ function OnVisibleChange()
         CancelLoad()
         CancelPrefetch()
         CancelChannelsLoad()
+        CancelHistoryLoad()
     end if
 end function
 
@@ -93,6 +98,7 @@ end function
 
 function ForceRefresh(_unused as dynamic)
     ClearFeedCache()
+    m.historyLoadedAt = invalid
     Refresh(invalid)
 end function
 
@@ -100,7 +106,6 @@ function ClearFeedCache()
     CancelLoad()
     CancelPrefetch()
     m.feedCache = {}
-    m.watchProgress = {}
 end function
 
 function CancelLoad()
@@ -136,6 +141,14 @@ function CancelChannelsLoad()
     end if
 end function
 
+function CancelHistoryLoad()
+    if m.historyJob <> invalid
+        m.historyJob.cancel = true
+        JobSystem.UnobserveCallback(m.historyJob)
+        m.historyJob = invalid
+    end if
+end function
+
 function Refresh(_unused as dynamic) as void
     CancelChannelsLoad()
     profile = m.profilesService.currentProfile
@@ -150,6 +163,10 @@ function Refresh(_unused as dynamic) as void
         m.channelUploads = {}
         m.seenState = invalid
         ClearFeedCache()
+        CancelHistoryLoad()
+        m.watchProgress = {}
+        m.watchCounts = {}
+        m.historyLoadedAt = invalid
         m.settingChannels = true
         content = CreateObject("roSGNode", "ContentNode")
         allItem = content.CreateChild("ContentNode")
@@ -168,7 +185,79 @@ function Refresh(_unused as dynamic) as void
     m.channels.visible = true
     m.channelsStatus.text = Tr(Locale.Subscriptions.Loading)
     m.channelsJob = JobSystem.CreateCallback(OnChannelsLoaded)
-    JobSystem.QueueJob(m.jobQueue, Jobs.SubscriptionChannelsJob, { invidious: m.invidious }, m.channelsJob)
+    JobSystem.QueueJob(m.jobQueue, Jobs.SubscriptionChannelsJob, { invidious: m.invidious, watchCounts: m.watchCounts }, m.channelsJob)
+    LoadWatchHistory()
+end function
+
+' Runs alongside the channel list so neither waits for the other.
+function LoadWatchHistory() as void
+    if m.historyJob <> invalid
+        return
+    end if
+    if m.historyLoadedAt <> invalid and TimeUtils.Now().AsSeconds() - m.historyLoadedAt < WATCH_HISTORY_CACHE_SECONDS
+        return
+    end if
+    m.historyJob = JobSystem.CreateCallback(OnWatchHistoryLoaded)
+    JobSystem.QueueJob(m.jobQueue, Jobs.SubscriptionWatchHistoryJob, { invidious: m.invidious }, m.historyJob)
+end function
+
+function OnWatchHistoryLoaded(event as object) as void
+    if m.historyJob = invalid or event.GetNode() <> m.historyJob.id
+        return
+    end if
+    JobSystem.UnobserveCallback(event.GetRoSGNode())
+    m.historyJob = invalid
+    info = event.GetInfo()
+    if info.cancel or not info.success or not IsAssociativeArray(info.data)
+        return
+    end if
+    m.historyLoadedAt = TimeUtils.Now().AsSeconds()
+    m.watchProgress = ValidAssociativeArray(info.data.progress)
+    m.watchCounts = ValidAssociativeArray(info.data.counts)
+    ApplyWatchProgressToGrid()
+    ResortChannels()
+end function
+
+' Applies new watch counts to the channel order, unless the user is browsing the
+' channel list (then the new order is used on the next load).
+function ResortChannels() as void
+    content = m.channels.content
+    if content = invalid or content.GetChildCount() < 3 or m.channelsJob <> invalid
+        return
+    end if
+    if m.channels.IsInFocusChain() and m.channels.itemFocused > 0
+        return
+    end if
+    items = content.GetChildren(-1, 0)
+    allItem = items.Shift()
+    entries = []
+    for each item in items
+        entries.Push({ authorId: item.id, latestUploadTimestamp: item.latestUploadTimestamp, node: item })
+    end for
+    sorted = SubscriptionChannelsUtils.Sort(entries, m.watchCounts)
+    changed = false
+    for index = 0 to sorted.Count() - 1
+        if sorted[index].authorId <> items[index].id
+            changed = true
+            exit for
+        end if
+    end for
+    if not changed
+        return
+    end if
+    m.settingChannels = true
+    newContent = CreateObject("roSGNode", "ContentNode")
+    newContent.AppendChild(allItem)
+    selectedIndex = 0
+    for each entry in sorted
+        newContent.AppendChild(entry.node)
+        if entry.authorId = m.selectedChannelId
+            selectedIndex = newContent.GetChildCount() - 1
+        end if
+    end for
+    m.channels.content = newContent
+    m.channels.jumpToItem = selectedIndex
+    m.settingChannels = false
 end function
 
 function OnChannelsLoaded(event as object) as void
@@ -220,8 +309,6 @@ function OnChannelsLoaded(event as object) as void
     if m.channels.IsInFocusChain()
         MarkChannelSeen(content.GetChild(selectedIndex))
     end if
-    m.watchProgress = ValidAssociativeArray(info.data.watchProgress)
-    ApplyWatchProgressToGrid()
     m.channelsStatus.text = ""
     if info.data.uploadDatesIncomplete = true
         m.channelsStatus.text = Tr(Locale.Subscriptions.UploadDatesIncomplete)

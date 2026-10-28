@@ -1,4 +1,5 @@
 import "pkg:/components/ContentNode/ProfileContentAuthTokenUtils.types.bs"
+import "pkg:/source/utils/TimeUtils.bs"
 
 namespace Tests
 
@@ -11,6 +12,7 @@ namespace Tests
             m.node.profilesService.AddField("currentProfile", "node", false)
             m.node.loadJob = invalid
             m.node.channelsJob = invalid
+            m.node.historyJob = invalid
             m.node.feed = invalid
             m.node.feedFailed = false
             m.top.visible = false
@@ -103,17 +105,20 @@ namespace Tests
             m.assertEqual(m.node.channels.content.GetChild(0).HDPosterUrl, "pkg:/images/icons/subscriptions.png")
         end function
 
-        @it("drops cached feeds and watch progress on an explicit refresh")
+        @it("drops cached feeds and reloads watch history on an explicit refresh")
         function _()
             m.node.feedCache = { "channel:UC-a": { feed: CreateObject("roSGNode", "FeedContentNode"), savedAt: 0 } }
             m.node.watchProgress = { "v1": 50 }
+            m.node.historyLoadedAt = TimeUtils.Now().AsSeconds()
             pendingPrefetch = CreateObject("roSGNode", "JobCallback")
             m.node.prefetchJob = pendingPrefetch
 
             m.top@.ForceRefresh(0)
 
             m.assertEqual(m.node.feedCache.Count(), 0)
-            m.assertEqual(m.node.watchProgress.Count(), 0)
+            ' Existing progress stays visible until the new history arrives.
+            m.assertEqual(m.node.watchProgress.Count(), 1)
+            m.assertInvalid(m.node.historyLoadedAt)
             m.assertTrue(pendingPrefetch.cancel)
             m.assertInvalid(m.node.prefetchJob)
         end function
